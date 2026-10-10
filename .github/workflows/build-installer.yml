@@ -1,0 +1,446 @@
+name: Build installer
+
+# 这个提交能不能打出能装的安装包？ci.yml 管编译与测试，release.yml 管 release-please 与签名发布，
+# 这里只回答上面那一个问题：把 TSF（x64 + Win32）、Server、词库、词格语言模型和神经整句模型
+# 全部备齐，用 Inno Setup 编译出 installer\Output\MetasequoiaIME_Setup_v<版本>.exe，作为 workflow
+# artifact 挂在这个 run 上。不创建 Release、不碰 release-please、不发 repository_dispatch。
+#
+# 设置窗口从上游移除 WebView2 起就是 Server 进程里的 Direct2D 窗口（server/src/settings/native/），
+# 不再有单独的设置页构建，也不再有 web 资产产物。
+#
+# push 到 develop / main 自动跑，也可以在 Actions 页面手动跑；手动时可以选择带 PDB 符号
+# （约 140 MB，装完的机器上直接做崩溃分析用，和正式 Release 带的符号是同一批文件）。
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      include_symbols:
+        description: 把与包内二进制匹配的 PDB 打进安装包（约 140 MB）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # 连续 push 只保留最新一轮：旧的那轮安装包编出来也没人要，还白占一个 GitHub-hosted
+  # Windows runner 将近一个小时。
+  group: build-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+  # CMakePresets.json 指向的是开发者本机的 vcpkg，CI 一律显式传 toolchain，不用 preset。
+  # 构建目录名照 Prepare-PackageFiles.ps1 的硬契约：build{32,64}-release。
+  tsf:
+    name: Build TSF ${{ matrix.name }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            architecture: x64
+            triplet: x64-windows-static
+            build_dir: windows/build64-release
+            cache_scope: tip-x64-windows-static
+          - name: Win32
+            architecture: Win32
+            triplet: x86-windows-static
+            build_dir: windows/build32-release
+            cache_scope: tip-x86-windows-static
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      # 版本资源在 configure 之前注入：.rc 是编译输入，装出来的包和 DLL 版本信息最终都落到
+      # version.txt 这一个数上（D2D 设置窗口的「当前版本」是编译进 About 页的常量，不随它走）。
+      - name: Stamp the version resource
+        shell: pwsh
+        run: |
+          python scripts/apply_version.py
+          if ($LASTEXITCODE -ne 0) { throw "apply_version.py failed ($LASTEXITCODE)" }
+          python scripts/apply_version.py --check
+          if ($LASTEXITCODE -ne 0) { throw "the version resource does not match version.txt" }
+      - name: Restore dependency binaries
+        id: vcpkg-cache
+        uses: ./.github/actions/vcpkg-cache
+        with:
+          scope: ${{ matrix.cache_scope }}
+      - name: Install dependencies
+        shell: pwsh
+        working-directory: windows
+        run: vcpkg install --triplet ${{ matrix.triplet }}
+      - name: Save dependency binaries before compiling
+        if: steps.vcpkg-cache.outputs.matched-key != format('{0}-complete', steps.vcpkg-cache.outputs.key)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.vcpkg-cache.outputs.path }}
+          key: ${{ steps.vcpkg-cache.outputs.key }}-complete
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S windows -B ${{ matrix.build_dir }} -A ${{ matrix.architecture }}
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+      - name: Build
+        shell: pwsh
+        run: cmake --build ${{ matrix.build_dir }} --config Release --parallel
+      # 提前拦“缺 DLL 或 PDB”，否则要到打包那一步才由 Prepare-PackageFiles.ps1 报出来。
+      - name: Check the TSF binary and symbols the installer expects
+        shell: pwsh
+        run: ./scripts/ci/check-tsf-dll.ps1 -BuildDir '${{ matrix.build_dir }}'
+      - name: Upload the TSF binary and symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tsf-${{ matrix.name }}
+          # 上传整个 Release 目录，下载方直接还原成 Prepare-PackageFiles.ps1 期望的布局。
+          path: ${{ matrix.build_dir }}/Release
+          if-no-files-found: error
+
+  server:
+    name: Build Server
+    runs-on: windows-2025
+    timeout-minutes: 90
+    # sccache 缓存单条 MSVC 编译，改一个文件不必重编整个 server + engine；
+    # 凡是会调编译器的步骤都要开它，configure 探编译器时也算。
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Stamp the version resource
+        shell: pwsh
+        run: |
+          python scripts/apply_version.py
+          if ($LASTEXITCODE -ne 0) { throw "apply_version.py failed ($LASTEXITCODE)" }
+          python scripts/apply_version.py --check
+          if ($LASTEXITCODE -ne 0) { throw "the version resource does not match version.txt" }
+      - name: Restore dependency binaries
+        id: vcpkg-cache
+        uses: ./.github/actions/vcpkg-cache
+        with:
+          scope: server-x64-windows-and-static-md
+      # Visual Studio 生成器自己找 MSVC，Ninja 不找，所以先让 cl.exe 上 PATH。
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Install Boost
+        shell: pwsh
+        run: ./scripts/ci/install-boost.ps1
+      - name: Save Boost binaries before configuring
+        if: steps.vcpkg-cache.outputs.matched-key != format('{0}-complete', steps.vcpkg-cache.outputs.key) && steps.vcpkg-cache.outputs.matched-key != format('{0}-boost', steps.vcpkg-cache.outputs.key)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.vcpkg-cache.outputs.path }}
+          key: ${{ steps.vcpkg-cache.outputs.key }}-boost
+      # Ninja Multi-Config：sccache 只能通过 CMAKE_<LANG>_COMPILER_LAUNCHER 接进来，而
+      # CMake 只对 Ninja 和 Makefile 生成器认这个变量；Multi-Config 保住 --config Release
+      # 和 bin/Release 布局，后面 check-server-binaries.ps1 和打包都读它。
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S server -B server/build-release -G "Ninja Multi-Config"
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+      - name: Save dependency binaries before compiling
+        if: steps.vcpkg-cache.outputs.matched-key != format('{0}-complete', steps.vcpkg-cache.outputs.key)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.vcpkg-cache.outputs.path }}
+          key: ${{ steps.vcpkg-cache.outputs.key }}-complete
+      - name: Build
+        shell: pwsh
+        run: cmake --build server/build-release --config Release --parallel
+      - name: Report sccache hit rate
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+      - name: Check the Release binaries and symbols
+        shell: pwsh
+        run: ./scripts/ci/check-server-binaries.ps1 -BuildDir server/build-release/bin/Release
+      # uiAccess 清单必须在签名之前嵌进去：Authenticode 签的是 PE 的确切字节，
+      # 签完再嵌等于把签名作废。这一步之后才轮到打包作业里的签名。
+      - name: Embed the Server uiAccess manifest
+        shell: pwsh
+        run: ./scripts/ci/embed-server-manifest.ps1 -BuildDir server/build-release/bin/Release
+      - name: Verify the embedded Server uiAccess manifest
+        shell: pwsh
+        run: ./scripts/ci/check-server-binaries.ps1 -BuildDir server/build-release/bin/Release
+      - name: Upload the Server build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: server
+          path: server/build-release/bin/Release
+          if-no-files-found: error
+
+  package:
+    name: Package installer
+    needs: [tsf, server]
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 打包只需要本仓文件：词库、语言模型、神经模型和三个构建产物都从别处来。
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      # 版本号以 version.txt 为唯一真源：安装脚本的 MyAppVersion 与 DLL 版本资源必须是同一个数
+      # （D2D 设置窗口 About 页显示的版本是编译期常量，不随 version.txt 走）。
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath 'version.txt' -Raw).Trim()
+          if (-not $version) { throw 'version.txt is empty' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Packaging version $version"
+      - name: Resolve the packaging options
+        id: options
+        shell: pwsh
+        run: |
+          # push 事件没有 inputs，插值出来是空串；只有手动勾选才是 true。
+          "include_symbols=$('${{ inputs.include_symbols }}' -eq 'true')" >> $env:GITHUB_OUTPUT
+
+      - name: Download the x64 TSF binary and symbols
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tsf-x64
+          path: windows/build64-release/Release
+      - name: Download the 32-bit TSF binary and symbols
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tsf-Win32
+          path: windows/build32-release/Release
+      - name: Download the Server build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: server
+          path: server/build-release/bin/Release
+
+      # 词库在 CI 现场构建，不再下载产品锁指定的 dict-* release。源数据取下面这份检出，
+      # 仓外的 msime resources/dictionary-sources、ECDICT、SCOWL 和 rime-jp_sela 由
+      # scripts/dictionary_build/inputs.lock.json 按大小和 SHA256 钉住，首次使用时下载。
+      - name: Check out the dictionary sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: metasequoiaime/msime-dictionary
+          path: msime-dictionary
+          persist-credentials: false
+
+      # 检出的是 msime-dictionary 的默认分支，所以产物不再等于 product-lock.json 里钉住的
+      # dict-v1.0.0——这是有意的：让词库源数据和构建器的回归在 CI 里就能看见。代价是嵌进安装包的
+      # product-manifest.json 仍记着锁里的 tag，而包里的词库已经不是那一份。要复现发布用的那一份时，
+      # 给上面的检出加 ref: d0dc0c2b594b5540b5de99ad12085c786410626e（锁里的 source_commit）即可，
+      # 再给下面的构建加 --compare-release dict-v1.0.0 就能断言两者逐表一致。
+      #
+      # 产物落点与 scripts/ci/download-dictionaries.sh 完全一致（MetasequoiaImeDict/out/），
+      # 下游 Prepare-PackageFiles.ps1 不用改。构建约 45 秒，另需下载约 66 MB 的 ECDICT。
+      - name: Build the dictionaries from source
+        shell: pwsh
+        run: |
+          python -m pip install pypinyin
+          if ($LASTEXITCODE -ne 0) { throw "安装 pypinyin 依赖失败（$LASTEXITCODE）" }
+          python scripts/build-dictionary.py --dictionary (Join-Path $env:GITHUB_WORKSPACE 'msime-dictionary')
+          if ($LASTEXITCODE -ne 0) { throw "从 msime-dictionary 构建词库失败（$LASTEXITCODE）" }
+
+      # 另外两样仓外输入仍按各自的锁校验 SHA256：语言模型从钉住的 libime 语料现场转换，
+      # 神经模型从钉住的 chinese-ime-lm release 下载。Prepare-PackageFiles.ps1 对它们只断言存在，
+      # 所以缺任何一样都是在打包时才炸。
+      - name: Build the word-lattice language model
+        shell: pwsh
+        run: ./scripts/build-language-model.ps1
+      - name: Download the neural sentence models
+        shell: pwsh
+        run: ./scripts/fetch-neural-model.ps1
+
+      # 与发布同一套判断：有证书 secret 就签，没有就出未签名包，文件名带 -unsigned 后缀。
+      # 不设 WINDOWS_SIGNING_PROVIDER，SignPath 路径只属于 release.yml——那需要人工审批两次。
+      - name: Decide the signing mode
+        id: signing
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+        run: ./scripts/ci/detect-release-signing.ps1
+
+      - name: Collect the installer payload
+        shell: pwsh
+        working-directory: installer
+        env:
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+          INCLUDE_SYMBOLS: ${{ steps.options.outputs.include_symbols }}
+        run: |
+          pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion $env:TARGET_VERSION `
+            -RepoRoot (Resolve-Path '..').Path `
+            -TsfDirectory windows -ServerDirectory server -NoticesDirectory . `
+            -HelpCodeDirectory engine/helpcode -IncludeSymbols:$env:INCLUDE_SYMBOLS
+
+      - name: Embed the exact product dependency manifest
+        shell: pwsh
+        env:
+          WINDOWS_COMMIT: ${{ github.sha }}
+        run: >
+          python scripts/product_lock.py manifest
+          --windows-commit "$env:WINDOWS_COMMIT"
+          --output installer/app_data/product-manifest.json
+
+      # 整包都签，不只是 uiAccess Server：Defender 会按信誉拦下未签名的辅助进程，
+      # 用户看到的现象是输入法装完了、设置页或表情面板打不开。
+      - name: Sign the payload binaries
+        if: ${{ steps.signing.outputs.signing_provider == 'certificate' }}
+        shell: pwsh
+        working-directory: installer
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+          TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: ../scripts/ci/sign-binaries.ps1 -Recurse -Path 'server_exe', 'tsf_dll'
+
+      # windows-2025 镜像自带的是 Chocolatey 装的 Inno Setup 6.7.1。这里显式安装 7.1.0 的
+      # 64-bit 版：官方 immutable release 地址 + winget 公布的 SHA256，与 6.x 并存；安装目录
+      # 前插进 GITHUB_PATH，后面探针和 Compile-Installer.ps1 里的 ISCC.exe 才解析到 7.1，
+      # 而不是 Chocolatey shim 里的 6.7.1。静默参数对齐镜像自带 6.7.1 的 Chocolatey 包
+      # （issrc 的 setup.iss 没设 DisableStartupPrompt，/SP- 因此是必须的）。
+      - name: Install Inno Setup 7.1
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' -OutFile $exe
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f') {
+            throw "innosetup-7.1.0-x64.exe checksum mismatch: expected 0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f, got $hash"
+          }
+          Unblock-File -LiteralPath $exe
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "installer: $((Get-Item $exe).Length) bytes, signature=$($sig.Status), signer=$($sig.SignerCertificate.Subject), elevated=$admin"
+          $log = Join-Path $env:RUNNER_TEMP 'innosetup-install.log'
+          # /SP- 必须带：/SILENT 和 /VERYSILENT 都不禁用开头的 "This will install... Do you wish
+          # to continue?" 提示，只有 DisableStartupPrompt 或 /SP- 能关掉它；/LOG 让安装失败时
+          # 有据可查。用 Start-Process 而不是 &：进程创建失败时 Start-Process 抛出的异常带
+          # Win32 原因，而 & 只会留下空的 $LASTEXITCODE（第一版就是这么栽的）。
+          $proc = Start-Process -FilePath $exe -ArgumentList @(
+              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/ALLUSERS', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) {
+                Write-Host '--- innosetup-install.log (tail) ---'
+                Get-Content -LiteralPath $log -Tail 40
+            }
+            throw "Inno Setup installer failed (exit code $($proc.ExitCode))"
+          }
+          # 安装目录按注册表（三个视图都查：/ALLUSERS 落 64 位视图，用户级安装落 HKCU）
+          # 加已知路径发现，不假设某一种。
+          $roots = [System.Collections.Generic.List[string]]::new()
+          foreach ($key in @(
+                  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1',
+                  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1',
+                  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1')) {
+              $location = (Get-ItemProperty -Path $key -Name 'InstallLocation' -ErrorAction SilentlyContinue).InstallLocation
+              if ($location) { $roots.Add($location.TrimEnd('\')) }
+          }
+          foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+              if ($base) { $roots.Add((Join-Path $base 'Inno Setup 7')) }
+          }
+          $root = $roots |
+              Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'ISCC.exe') -PathType Leaf) } |
+              Select-Object -First 1
+          if (-not $root) { throw "ISCC.exe not found after install. Looked in: $($roots -join '; ')" }
+          $iscc = Join-Path $root 'ISCC.exe'
+          $version = & $iscc --version 2>&1
+          if ($LASTEXITCODE -ne 0 -or -not ($version -match '7\.1')) {
+              throw "unexpected ISCC version: $version"
+          }
+          Write-Host "Inno Setup $version -> $iscc"
+          # GITHUB_PATH 前插到后续步骤 PATH 最前面：探针脚本里的裸 ISCC.exe 和
+          # Compile-Installer.ps1 的 Get-Command 都因此解析到 7.1。
+          $root | Add-Content -Path $env:GITHUB_PATH
+
+      # 这个脚本自己会按固定 revision 和校验和把 ChineseSimplified.isl 装进真正的 Inno Setup
+      # 安装目录，并编译一个只含 [Languages] 的探针——让 ISCC 自己回答语言文件放对没有、
+      # 版本够不够 6.6。没有它，缺语言文件要到 Inno 编译时才报。build-installer 里跑的是上一步
+      # 装的 7.1（自带官方简体中文翻译，脚本会直接复用）；ci.yml / release.yml 仍用镜像自带的
+      # 6.7.1，那边才真正走钉住的下载。
+      - name: Check the Inno Setup can compile the installer
+        shell: pwsh
+        run: ./scripts/ci/check-inno-language.ps1
+
+      - name: Compile the installer
+        shell: pwsh
+        working-directory: installer
+        run: pwsh -File ./Compile-Installer.ps1
+
+      - name: Sign the installer
+        if: ${{ steps.signing.outputs.signing_provider == 'certificate' }}
+        shell: pwsh
+        working-directory: installer
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+          TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+        run: ../scripts/ci/sign-binaries.ps1 -Path "Output/MetasequoiaIME_Setup_v$env:TARGET_VERSION.exe"
+
+      - name: Name the asset and record its checksum
+        id: asset
+        shell: pwsh
+        working-directory: installer
+        env:
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+          ASSET_SUFFIX: ${{ steps.signing.outputs.asset_suffix }}
+        run: |
+          # 写进 GITHUB_ENV 只对后续步骤生效，本步骤内要用就设进程环境变量。
+          $dictionary = (Get-Content -LiteralPath (Join-Path (Resolve-Path '..').Path 'product-lock.json') -Raw |
+              ConvertFrom-Json).dictionary
+          $env:DICTIONARY_TAG = $dictionary.tag
+          ../scripts/ci/name-installer-asset.ps1
+
+      # detect-release-signing.ps1 已经发过一条 ::warning::，这里只补充说明和配置方式。
+      - name: Explain the unsigned build
+        if: ${{ steps.signing.outputs.signing_enabled != 'true' }}
+        shell: pwsh
+        run: |
+          @(
+            '### Unsigned installer'
+            ''
+            'No signing certificate is configured for this run, so neither the payload binaries nor the'
+            'installer itself carry an Authenticode signature. The package installs, but'
+            '`uiAccess="true"` is ignored without a trusted signature: the candidate window cannot'
+            'float over elevated hosts. Configure `WINDOWS_SIGNING_CERTIFICATE_BASE64` /'
+            '`WINDOWS_SIGNING_CERTIFICATE_PASSWORD` (or a thumbprint in the runner store) to sign it.'
+            ''
+          ) | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload the installer as a workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer
+          path: |
+            ${{ steps.asset.outputs.asset_path }}
+            installer/app_data/product-manifest.json
+          if-no-files-found: error

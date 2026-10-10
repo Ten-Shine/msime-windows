@@ -45,7 +45,25 @@ def default_dictionary() -> Path:
     return build.ROOT.parent / "msime-dictionary"
 
 
+def use_utf8_output() -> None:
+    """让标准输出与标准错误走 UTF-8。
+
+    Windows 上把输出重定向到管道时 Python 用的是 ANSI 代码页（CI 的 runner 上是 cp1252），而本脚本
+    的进度信息是中文，print 会抛 UnicodeEncodeError。它是 ValueError 的子类，会被下面 main() 的
+    except 吞掉、包装成「失败：...」，真正的原因反而看不见 —— CI 上只看到 charmap 编码失败，
+    误以为是词库构建失败。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+
 def main() -> None:
+    use_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dictionary", type=Path, default=None,
                         help="msime-dictionary checkout，默认取环境变量 MSIME_DICTIONARY，否则是本仓同级的 msime-dictionary")
