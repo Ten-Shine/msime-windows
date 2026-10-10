@@ -41,7 +41,7 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 - **`Sign-PackageBinaries-Local.ps1` 和 `Sign-Installer-Local.ps1` 只用于本地验证，CI 不会调用它们。** 它们创建本机自签名证书并尝试写入受信任存储，正式发布走 workflow 里用仓库 secret 中真实证书的签名步骤
 - 词库不再从相邻的 `MetasequoiaImeDict` 工作目录取，CI 从产品锁指定的 `dict-*` release 下载并校验 SHA256，再放到脚本期望的位置
 - 语言模型 `sc.lm` 不在那个 release 里。它由 `scripts/build-language-model.ps1` 在打包前从 `language-model/lock.json` 钉住的 libime 语料转换出来，下载摘要和产物摘要都要对上。release workflow 里对应的是「Build the word-lattice language model」这一步，缺了它 `Prepare-PackageFiles.ps1` 会直接失败
-- `windows-2025` runner 自带 Inno Setup 6.7.1，`Compile-Installer.ps1` 能自己找到 `ISCC.exe`。但它不带 `ChineseSimplified.isl`，`msime_setup.iss` 的 `[Languages]` 段依赖那个文件，所以 workflow 会在编译前按固定 revision 和校验和把它装进去
+- `windows-2025` runner 自带 Inno Setup 6.7.1（Chocolatey），`Compile-Installer.ps1` 能自己找到 `ISCC.exe`。`build-installer.yml` 的 package job 会在编译前显式改装 7.1.0 的 64-bit 版（官方 immutable release + winget 公布的 SHA256，`/ALLUSERS` 静默装机，安装目录前插进 `GITHUB_PATH` 抢占 ISCC）；`ci.yml` / `release.yml` 仍用镜像自带的 6.7.1。`msime_setup.iss` 的 `[Languages]` 段依赖 `ChineseSimplified.isl`，6.7.1 不带这个文件（简体中文自 Inno Setup 7.0.2 起才是官方翻译），所以 workflow 会在编译前按固定 revision 和校验和把它装进 Inno Setup 安装目录；7.1 安装目录里已有官方简体中文翻译，且与钉住的 issrc 文件字节一致，脚本直接复用不再下载。`install-inno-language.ps1` 的目录发现按 7 优先、6 兜底
 
 ## 数据目录
 

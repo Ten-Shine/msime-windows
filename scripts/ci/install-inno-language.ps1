@@ -14,6 +14,13 @@
 #
 # So find the installation by a file only it has, and refuse to guess. Getting this wrong silently
 # is what made it cost a whole release cycle to notice.
+#
+# Inno Setup 7 is probed before 6: build-installer.yml's package job installs the 64-bit 7.1.0
+# edition (machine scope, so its uninstall key lands in the 64-bit registry view) before running
+# this script, while ci.yml and release.yml still run against the hosted Chocolatey 6.7.1. Both
+# editions' installations carry the marker files. Since 7.0.2 Simplified Chinese is an official
+# translation, a 7.1 installation already ships ChineseSimplified.isl and the download below is
+# skipped; the 6.x runners do not ship it, which is what the pin is for.
 $ErrorActionPreference = 'Stop'
 
 # The pin lives here rather than in the workflow so that ci.yml can run this script as a regression
@@ -25,14 +32,24 @@ $expected = 'e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d'
 $markers = @('ISPPBuiltins.iss', 'Default.isl')
 
 $candidates = [System.Collections.Generic.List[string]]::new()
+# Inno Setup 7 first: the x64 edition writes 'Inno Setup 7_is1' to the 64-bit view, a 32-bit
+# edition or a user-scope install lands elsewhere, so probe every view before falling back to 6.
 foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7_is1',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7 (32-bit)_is1',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7 (32-bit)_is1',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 7 (32-bit)_is1',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1')) {
     $location = (Get-ItemProperty -Path $key -Name 'InstallLocation' -ErrorAction SilentlyContinue).InstallLocation
     if ($location) { $candidates.Add($location.TrimEnd('\')) }
 }
-foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
-    if ($base) { $candidates.Add((Join-Path $base 'Inno Setup 6')) }
+foreach ($name in @('Inno Setup 7', 'Inno Setup 7 (32-bit)', 'Inno Setup 6')) {
+    foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+        if ($base) { $candidates.Add((Join-Path $base $name)) }
+    }
 }
 foreach ($command in @(Get-Command 'ISCC.exe' -CommandType Application -ErrorAction SilentlyContinue)) {
     $candidates.Add((Split-Path $command.Source -Parent))
