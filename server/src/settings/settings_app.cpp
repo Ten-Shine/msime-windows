@@ -586,6 +586,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"cn_en_mixed_input", GetConfiguredEnglishCandidatesEnabled()},
             {"candidate_translations", GetConfiguredCandidateTranslationsEnabled()},
             {"candidate_translation_show_pos", GetConfiguredCandidateTranslationShowPos()},
+            {"candidate_translation_ctrl_digit", GetConfiguredCandidateTranslationCtrlDigitEnabled()},
+            {"candidate_translation_shift_digit", GetConfiguredCandidateTranslationShiftDigitEnabled()},
             {"cn_en_mixed_input_min_chars", GetConfiguredEnglishMixedInputMinChars()},
             {"emoji_mixed_input", GetConfiguredEmojiMixedInputEnabled()},
             {"kaomoji_mixed_input", GetConfiguredKaomojiMixedInputEnabled()},
@@ -1021,6 +1023,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCandidateTranslationsEnabled(json::value_to<bool>(data.at("value")));
     if (path == "general.candidate_translation_show_pos")
         return SetConfiguredCandidateTranslationShowPos(json::value_to<bool>(data.at("value")));
+    if (path == "general.candidate_translation_ctrl_digit")
+        return SetConfiguredCandidateTranslationCtrlDigitEnabled(json::value_to<bool>(data.at("value")));
+    if (path == "general.candidate_translation_shift_digit")
+        return SetConfiguredCandidateTranslationShiftDigitEnabled(json::value_to<bool>(data.at("value")));
     if (path == "general.cn_en_mixed_input_min_chars")
         return SetConfiguredEnglishMixedInputMinChars(static_cast<int>(data.at("value").as_int64()));
     if (path == "general.emoji_mixed_input")

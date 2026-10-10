@@ -327,6 +327,14 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
     const checkbox = findElement('candidateArrowNavigationCheckbox') as HTMLInputElement | null;
     if (checkbox) checkbox.checked = data.general.candidate_arrow_navigation;
   }
+  if (typeof data?.general?.candidate_translation_ctrl_digit === 'boolean') {
+    const checkbox = findElement('translationCtrlDigitCheckbox') as HTMLInputElement | null;
+    if (checkbox) checkbox.checked = data.general.candidate_translation_ctrl_digit;
+  }
+  if (typeof data?.general?.candidate_translation_shift_digit === 'boolean') {
+    const checkbox = findElement('translationShiftDigitCheckbox') as HTMLInputElement | null;
+    if (checkbox) checkbox.checked = data.general.candidate_translation_shift_digit;
+  }
   if (typeof data?.helpcode?.show_sp_helpcode_in_candidate_window === 'boolean') {
     applyToggleState(
       'showShuangpinHelpcodeToggleBtn',

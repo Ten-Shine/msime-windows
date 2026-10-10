@@ -15,6 +15,92 @@ TEST_CASE(ctrl_enter_alone_commits_the_secondary_candidate)
     REQUIRE(!IsTranslationCommitKey('J', FanyImeIpc::kModifierControl));
 }
 
+TEST_CASE(ctrl_digit_alone_commits_the_numbered_translation)
+{
+    using FanyImeIpc::IsTranslationDigitKey;
+    using FanyImeIpc::TranslationDigitPosition;
+    for (uint32_t digit = '1'; digit <= '9'; ++digit)
+    {
+        REQUIRE(IsTranslationDigitKey(digit, FanyImeIpc::kModifierControl));
+        // The UI-less flag lives outside the modifier mask and must not disarm the shortcut.
+        REQUIRE(IsTranslationDigitKey(digit, FanyImeIpc::kModifierControl | FanyImeIpc::kModifierUiLess));
+        // Ctrl+1 names the first candidate, so the position is one-based.
+        REQUIRE_EQ(TranslationDigitPosition(digit, FanyImeIpc::kModifierControl), digit - '0');
+    }
+
+    // A bare digit still selects the candidate itself, and the other modifiers stay the host's.
+    REQUIRE(!IsTranslationDigitKey('1', 0));
+    REQUIRE(!IsTranslationDigitKey('1', FanyImeIpc::kModifierControl | FanyImeIpc::kModifierShift));
+    REQUIRE(!IsTranslationDigitKey('1', FanyImeIpc::kModifierControl | FanyImeIpc::kModifierAlt));
+    // 0 is not a candidate position.
+    REQUIRE(!IsTranslationDigitKey('0', FanyImeIpc::kModifierControl));
+    // A non-digit chord is not a position either.
+    REQUIRE(!IsTranslationDigitKey(0x0D, FanyImeIpc::kModifierControl));
+    REQUIRE_EQ(TranslationDigitPosition('3', 0), static_cast<uint32_t>(0));
+}
+
+TEST_CASE(shift_digit_alone_commits_the_numbered_translation)
+{
+    using FanyImeIpc::IsTranslationDigitKey;
+    using FanyImeIpc::IsTranslationShiftDigitKey;
+    using FanyImeIpc::TranslationDigitPosition;
+    for (uint32_t digit = '1'; digit <= '9'; ++digit)
+    {
+        REQUIRE(IsTranslationShiftDigitKey(digit, FanyImeIpc::kModifierShift));
+        // The UI-less flag lives outside the modifier mask and must not disarm the shortcut.
+        REQUIRE(IsTranslationShiftDigitKey(digit, FanyImeIpc::kModifierShift | FanyImeIpc::kModifierUiLess));
+        // Shift+1 names the first candidate, so the position is one-based.
+        REQUIRE_EQ(TranslationDigitPosition(digit, FanyImeIpc::kModifierShift), digit - '0');
+    }
+
+    // A bare digit still selects the candidate itself, and the other modifiers stay the host's.
+    REQUIRE(!IsTranslationShiftDigitKey('1', 0));
+    REQUIRE(!IsTranslationShiftDigitKey('1', FanyImeIpc::kModifierShift | FanyImeIpc::kModifierControl));
+    REQUIRE(!IsTranslationShiftDigitKey('1', FanyImeIpc::kModifierShift | FanyImeIpc::kModifierAlt));
+    // 0 is not a candidate position.
+    REQUIRE(!IsTranslationShiftDigitKey('0', FanyImeIpc::kModifierShift));
+    // A non-digit chord is not a position either.
+    REQUIRE(!IsTranslationShiftDigitKey(0x0D, FanyImeIpc::kModifierShift));
+    // Ctrl+digit and Shift+digit are different chords: the position helper recognizes both,
+    // but each recognizer only answers for its own modifier.
+    REQUIRE(IsTranslationDigitKey('1', FanyImeIpc::kModifierControl));
+    REQUIRE(!IsTranslationShiftDigitKey('1', FanyImeIpc::kModifierControl));
+    REQUIRE(!IsTranslationDigitKey('1', FanyImeIpc::kModifierShift));
+    REQUIRE(IsTranslationShiftDigitKey('1', FanyImeIpc::kModifierShift));
+    REQUIRE_EQ(TranslationDigitPosition('3', 0), static_cast<uint32_t>(0));
+}
+
+TEST_CASE(translation_shift_digit_stands_down_where_v_mode_owns_the_key)
+{
+    using FanyImeIpc::IsTranslationDigitKey;
+    using FanyImeIpc::IsTranslationShiftDigitKey;
+    using FanyImeIpc::IsTranslationShiftDigitKeyUnlessInputModeOwns;
+    constexpr uint32_t shift = FanyImeIpc::kModifierShift;
+    constexpr uint32_t control = FanyImeIpc::kModifierControl;
+
+    // V 模式里裸数字组成算式，选词改用 Shift+数字，那些候选没有译文：Shift 必须让行。TSF 侧
+    // IsShiftDigitOwnedByInputMode 按同一条形状让行；两边不一致就会变成一次吞键——TSF 把键当
+    // V 模式输入吃下并写进本地预编辑，Server 却当译文快捷键吞掉、不写输入串，算式里的 * ( )
+    // 于是只出现在文本框里，进不了候选。
+    for (uint32_t digit = '1'; digit <= '9'; ++digit)
+    {
+        REQUIRE(IsTranslationShiftDigitKey(digit, shift));
+        REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns(digit, shift, true));
+        REQUIRE(IsTranslationShiftDigitKeyUnlessInputModeOwns(digit, shift, false));
+    }
+
+    // Ctrl+数字 不受影响：V 模式的编码键不带 Ctrl，这条 chord 两边始终一致。
+    REQUIRE(IsTranslationDigitKey('8', control));
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns('8', control, true));
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns('8', control, false));
+
+    // 本来就不是这条 chord 的键，让不让行都改变不了结论。
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns('8', 0, false));
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns('8', shift | control, false));
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns('0', shift, false));
+    REQUIRE(!IsTranslationShiftDigitKeyUnlessInputModeOwns(0x0D, shift, false));
+}
+
 TEST_CASE(translation_gloss_splits_on_both_semicolon_widths)
 {
     using FanyImeIpc::SplitTranslationGloss;

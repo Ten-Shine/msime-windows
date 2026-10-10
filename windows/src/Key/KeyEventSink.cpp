@@ -273,13 +273,55 @@ static bool CanQueueHotkeyBehindBarrier(REFGUID hotkeyGuid)
            IsEqualGUID(hotkeyGuid, Global::MetasequoiaIMEGuidDoubleSingleBytePreserveKey);
 }
 
-// Ctrl+Enter, without Shift/Alt/Windows: commit the translation shown to the right of the
-// highlighted candidate. The Server decides what that is (one translation commits directly,
-// several open a second candidate list), so this only has to reach it as a candidate key.
+// Ctrl+Enter commits the translation shown to the right of the highlighted candidate. Without
+// Shift/Alt/Windows: those combinations still belong to the application. Numpad digits count
+// too; the Server normalizes them to their main-row equivalents. This only decides that the
+// key is ours -- whether that candidate has a translation is the Server's call.
 bool IsTranslationCommitShortcut(UINT code, UINT modifiers)
 {
     return code == VK_RETURN && (modifiers & 0b00000111u) == 0b00000010u && (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
            (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+}
+
+// Whether this is a Ctrl+digit or Shift+digit chord at all (without Alt/Windows), independent
+// of the config toggles which the caller applies. Numpad digits count too.
+bool IsTranslationDigitShortcutShape(UINT code, UINT modifiers)
+{
+    const bool digit = (code >= L'1' && code <= L'9') || (code >= VK_NUMPAD1 && code <= VK_NUMPAD9);
+    const UINT bare_modifiers = modifiers & 0b00000111u;
+    return digit && (bare_modifiers == 0b00000010u || bare_modifiers == 0b00000001u) &&
+           (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 && (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+}
+
+// V-mode (V then a number or expression) spends its bare digits on composing instead of
+// selecting, so it promotes Shift+1..9 to the selection key -- see IsVModeShiftDigitSelectionKey
+// in CompositionProcessorEngine_KeyClassify.cpp and its deferred twin. Only the main-row digits
+// take part: that branch tests '1'..'9' only, so the numpad twins stay available.
+//
+// U-mode used to be listed here too, back when Shift+U entered a hex code point. It is now a
+// radical lookup whose parts are typed as pinyin letters, so its bare digits select like any
+// other composition and Shift+digit is no longer spoken for.
+bool IsShiftDigitOwnedByInputMode(UINT code, bool v_mode_shift_digit_selection)
+{
+    return code >= L'1' && code <= L'9' && v_mode_shift_digit_selection;
+}
+
+// Ctrl+1..9 / Shift+1..9 commit the translation of the candidate at that page position. The
+// enabled flags come from the shared config so a toggle in Settings lands within a second.
+// Shift stands down where an input mode already owns the key: V-mode's candidates carry no
+// gloss, so taking it here would leave its choices unreachable rather than merely untranslated.
+bool IsConfiguredTranslationDigitShortcut(UINT code, UINT modifiers, bool shift_digit_selects_candidate)
+{
+    if (!IsTranslationDigitShortcutShape(code, modifiers))
+    {
+        return false;
+    }
+    const FanyUtils::CandidateTranslationShortcuts shortcuts = FanyUtils::ReadConfiguredCandidateTranslationShortcuts();
+    if ((modifiers & 0b00000111u) == 0b00000010u)
+    {
+        return shortcuts.ctrl_digit;
+    }
+    return shortcuts.shift_digit && !shift_digit_selects_candidate;
 }
 
 bool IsPinyinCommitShortcut(UINT code, UINT modifiers)
@@ -508,10 +550,22 @@ BOOL CMetasequoiaIME::_IsKeyEaten(         //
             return TRUE;
         }
 
-        // Ctrl+Enter commits a candidate translation. Shift+Enter commits the
-        // Server's converted spelling, including compositions without candidates.
+        // Ctrl+Enter commits the translation shown next to the highlighted candidate,
+        // Ctrl+1..9 / Shift+1..9 the translation of the candidate at that position (each
+        // gated by its own Settings toggle). Shift+Enter commits the Server's converted
+        // spelling, including compositions without candidates.
+        //
+        // Shift+digit is additionally withheld where an input mode needs it to select -- V-mode
+        // spent its bare digits on composing, and its candidates have no gloss.
+        const bool vModeShiftSelection = pCompositionProcessorEngine != nullptr &&
+                                         CCompositionProcessorEngine::IsVModeShiftDigitSelectionKey(
+                                             *pCodeOut, pCompositionProcessorEngine->GetKeystrokeBuffer().Get(),
+                                             pCompositionProcessorEngine->GetKeystrokeBuffer().GetLength());
+        const bool shiftDigitSelects = IsShiftDigitOwnedByInputMode(*pCodeOut, vModeShiftSelection);
         if (!freshCompositionState &&
-            ((_candidateMode != CANDIDATE_NONE && IsTranslationCommitShortcut(*pCodeOut, shortcutModifiers)) ||
+            ((_candidateMode != CANDIDATE_NONE &&
+              (IsTranslationCommitShortcut(*pCodeOut, shortcutModifiers) ||
+               IsConfiguredTranslationDigitShortcut(*pCodeOut, shortcutModifiers, shiftDigitSelects))) ||
              (!_serverUnavailableFallbackActive && pCompositionProcessorEngine->GetVirtualKeyLength() > 0 &&
               IsPinyinCommitShortcut(*pCodeOut, shortcutModifiers))))
         {

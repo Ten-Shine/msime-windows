@@ -370,6 +370,7 @@ export function setupInput(): void {
   });
 
   setupPageOptions();
+  setupTranslationShortcutOptions();
   setupFrequencyOptions();
   setupToggleButton('wordToCharacterToggleBtn', (active) => {
     updateConfig('input.word_to_character', active);
@@ -515,6 +516,20 @@ function setupPageOptions(): void {
         page: 'general.paging_page_up_down',
         arrow: 'general.candidate_arrow_navigation',
         wheel: 'general.paging_mouse_wheel'
+      };
+      const path = configPaths[checkbox.value];
+      if (path) updateConfig(path, checkbox.checked);
+    });
+  });
+}
+
+// 译文快捷键：数字键上屏指定序号候选的译文。Ctrl+数字默认开启，Shift+数字默认关闭。
+function setupTranslationShortcutOptions(): void {
+  document.querySelectorAll<HTMLInputElement>('input[name="translation-shortcut"]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const configPaths: Record<string, string> = {
+        ctrl: 'general.candidate_translation_ctrl_digit',
+        shift: 'general.candidate_translation_shift_digit'
       };
       const path = configPaths[checkbox.value];
       if (path) updateConfig(path, checkbox.checked);

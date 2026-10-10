@@ -127,6 +127,49 @@ inline std::string FormatTranslationGlossForDisplay(std::string_view gloss, bool
     return displayed;
 }
 
+// Helper for the digit-chord recognizers below: the digit range and the exact modifier mask.
+constexpr bool IsTranslationDigitFor(uint32_t keycode, uint32_t modifiers_down, uint32_t expected_modifier)
+{
+    return keycode >= static_cast<uint32_t>('1') && keycode <= static_cast<uint32_t>('9') &&
+           (modifiers_down & kKeyModifierMask) == expected_modifier;
+}
+
+// Ctrl+1..9 commits the translation of the candidate at that one-based page position, the
+// numbered counterpart of Ctrl+Enter (which commits the highlighted one). Only the bare Ctrl
+// chord is the IME's: Alt and the Windows keys keep their host meaning, and a bare digit still
+// selects the candidate itself. Enabled by default.
+constexpr bool IsTranslationDigitKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return IsTranslationDigitFor(keycode, modifiers_down, kModifierControl);
+}
+
+// Shift+1..9 is the same numbered translation shortcut with Shift instead of Ctrl. It is
+// opt-in: by default Shift+digit keeps its host meaning (typically the shifted symbol on
+// the key, e.g. Shift+1 types '!'), so this recognizer only says yes when the user enabled
+// the shift_digit config key.
+constexpr bool IsTranslationShiftDigitKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return IsTranslationDigitFor(keycode, modifiers_down, kModifierShift);
+}
+
+// Shift+1..9 的译文快捷键，但输入模式自己占用 Shift+数字 时让行。V 模式的裸数字是算式编码键
+// （数字、. + - * / ( )），选词改用 Shift+数字，而那里的候选没有译文 —— 抢过来只会让选词不可达。
+// TSF 侧 IsShiftDigitOwnedByInputMode 按同一条形状让行（只认主键盘 '1'..'9'）；两边不一致就会变成
+// 一次吞键：TSF 把键当 V 模式输入吃下、写进本地预编辑，Server 却当译文快捷键吞掉、不写输入串。
+constexpr bool IsTranslationShiftDigitKeyUnlessInputModeOwns(uint32_t keycode, uint32_t modifiers_down,
+                                                             bool input_mode_owns_shift_digit)
+{
+    return IsTranslationShiftDigitKey(keycode, modifiers_down) && !input_mode_owns_shift_digit;
+}
+
+// One-based candidate position the Ctrl/Shift+digit chord names, 0 when it is not that chord.
+constexpr uint32_t TranslationDigitPosition(uint32_t keycode, uint32_t modifiers_down)
+{
+    return (IsTranslationDigitKey(keycode, modifiers_down) || IsTranslationShiftDigitKey(keycode, modifiers_down))
+               ? keycode - static_cast<uint32_t>('0')
+               : 0;
+}
+
 // english.db stores one gloss string per entry with the senses already joined:
 // en->zh uses the fullwidth '；' ("苹果；家伙"), zh->en the ASCII "; " ("string; trail").
 // Every sense is returned, with its part-of-speech label removed.

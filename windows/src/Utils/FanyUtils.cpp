@@ -556,6 +556,104 @@ SwitchLanguageHotkeys ReadConfiguredSwitchLanguageHotkeys()
     return result;
 }
 
+CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
+{
+    struct Cache
+    {
+        ULONGLONG checkedTick = 0;
+        FILETIME lastWrite{};
+        DWORD sizeLow = 0;
+        DWORD sizeHigh = 0;
+        bool checked = false;
+        bool haveStamp = false;
+        CandidateTranslationShortcuts value;
+    };
+    static Cache cache;
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
+    const ULONGLONG now = GetTickCount64();
+    if (!cache.checked || now - cache.checkedTick >= 1000)
+    {
+        cache.checked = true;
+        cache.checkedTick = now;
+        try
+        {
+            const std::filesystem::path path = SharedConfigPath();
+            WIN32_FILE_ATTRIBUTE_DATA attributes{};
+            if (path.empty() || !GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes))
+            {
+                cache.value = CandidateTranslationShortcuts{};
+                cache.haveStamp = false;
+            }
+            else if (!cache.haveStamp || CompareFileTime(&attributes.ftLastWriteTime, &cache.lastWrite) != 0 ||
+                     attributes.nFileSizeLow != cache.sizeLow || attributes.nFileSizeHigh != cache.sizeHigh)
+            {
+                cache.haveStamp = true;
+                cache.lastWrite = attributes.ftLastWriteTime;
+                cache.sizeLow = attributes.nFileSizeLow;
+                cache.sizeHigh = attributes.nFileSizeHigh;
+                CandidateTranslationShortcuts parsed;
+                std::ifstream input(path, std::ios::binary);
+                if (!input)
+                {
+                    cache.haveStamp = false;
+                }
+                else
+                {
+                    bool inGeneral = false;
+                    std::string line;
+                    while (std::getline(input, line))
+                    {
+                        const size_t comment = line.find('#');
+                        if (comment != std::string::npos)
+                        {
+                            line = line.substr(0, comment);
+                        }
+                        line = TrimAscii(line);
+                        if (line.empty())
+                        {
+                            continue;
+                        }
+                        if (line.front() == '[' && line.back() == ']')
+                        {
+                            inGeneral = (line == "[general]");
+                            continue;
+                        }
+                        if (!inGeneral)
+                        {
+                            continue;
+                        }
+                        const size_t eq = line.find('=');
+                        if (eq == std::string::npos)
+                        {
+                            continue;
+                        }
+                        const std::string key = TrimAscii(line.substr(0, eq));
+                        const std::string raw = line.substr(eq + 1);
+                        if (key == "candidate_translation_ctrl_digit")
+                        {
+                            parsed.ctrl_digit = ParseTomlBool(raw, true);
+                        }
+                        else if (key == "candidate_translation_shift_digit")
+                        {
+                            parsed.shift_digit = ParseTomlBool(raw, false);
+                        }
+                    }
+                    cache.value = parsed;
+                }
+            }
+        }
+        catch (...)
+        {
+            cache.value = CandidateTranslationShortcuts{};
+            cache.haveStamp = false;
+        }
+    }
+    const CandidateTranslationShortcuts result = cache.value;
+    ReleaseSRWLockExclusive(&lock);
+    return result;
+}
+
 bool ReadConfiguredVimMode()
 {
     struct Cache

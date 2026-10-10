@@ -448,6 +448,12 @@ bool GetConfiguredCandidateTranslationsEnabled();
 bool SetConfiguredCandidateTranslationsEnabled(bool enabled);
 bool GetConfiguredCandidateTranslationShowPos();
 bool SetConfiguredCandidateTranslationShowPos(bool show);
+// Ctrl+数字上屏指定序号候选的译文（默认开启）。
+bool GetConfiguredCandidateTranslationCtrlDigitEnabled();
+bool SetConfiguredCandidateTranslationCtrlDigitEnabled(bool enabled);
+// Shift+数字上屏指定序号候选的译文（默认关闭）。
+bool GetConfiguredCandidateTranslationShiftDigitEnabled();
+bool SetConfiguredCandidateTranslationShiftDigitEnabled(bool enabled);
 int GetConfiguredEnglishMixedInputMinChars();
 bool SetConfiguredEnglishMixedInputMinChars(int min_chars);
 bool GetConfiguredEmojiMixedInputEnabled();

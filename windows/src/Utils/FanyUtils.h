@@ -49,4 +49,15 @@ struct LanguageBarVisibility
 };
 // Read language_bar.enabled / show_ime_mode / show_double_single_byte / show_punctuation.
 LanguageBarVisibility ReadConfiguredLanguageBarVisibility();
+
+// Whether the numbered translation shortcuts are enabled: Ctrl+digit (default on) and
+// Shift+digit (default off) commit the translation of the candidate at that page position.
+struct CandidateTranslationShortcuts
+{
+    bool ctrl_digit = true;
+    bool shift_digit = false;
+};
+// Read general.candidate_translation_ctrl_digit / candidate_translation_shift_digit from
+// shared config.toml.
+CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts();
 } // namespace FanyUtils
