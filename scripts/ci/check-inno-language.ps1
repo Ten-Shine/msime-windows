@@ -11,7 +11,10 @@
 # what makes ISCC answer the question. Seconds on an image that already ships Inno Setup.
 #
 # The probe also carries msime_setup.iss's WizardStyle=modern dynamic, which ISCC older than 6.6
-# rejects, so the same compile answers whether this ISCC can build the real installer.
+# rejects, so the same compile answers whether this ISCC can build the real installer. In
+# build-installer.yml the ISCC on PATH is the explicitly installed 7.1 (which ships the official
+# Chinese translation, so install-inno-language.ps1 reuses it); in ci.yml and release.yml it is
+# the hosted 6.7.1, which downloads the pinned .isl first. Both paths compile the same probe.
 $ErrorActionPreference = 'Stop'
 
 & "$PSScriptRoot/install-inno-language.ps1"
