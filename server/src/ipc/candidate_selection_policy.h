@@ -105,12 +105,17 @@ inline size_t IndexAfterLocalCandidates(const std::vector<WordItem> &items, size
 //                  没学过时用默认位置。
 //   require_exact  输入能读成拼音时置位：和输入完全相同的英文词优先占槽位，默认紧跟第一个中文
 //                  候选；没有精确匹配时由最前的补全词（zai → zaire）占槽位，默认退到首页末位。
+//   chinese_exact_match
+//                  候选里已经有「匹配码正好等于整串输入、选它上屏能把整框清空」的中文词库行
+//                  （字面整词，比的是 item.pinyin 而非 canonical_pinyin）。有它就没有「打出的
+//                  字母没有完全匹配的中文」这回事，英文不置顶。
 //   input          小写的当前输入，用来认精确匹配。
 //   page_size      每页候选数，给补全词的默认位置、槽位上限和首个 emoji 的位置用；0 表示不限。
 struct EnglishPlacement
 {
     std::optional<size_t> slot;
     bool require_exact = false;
+    bool chinese_exact_match = false;
     std::string input;
     size_t page_size = 0;
 };
@@ -200,16 +205,20 @@ inline void NormalizeMixedCandidateOrder(std::vector<WordItem> &items, size_t lo
         items.insert(items.begin() + offset, std::move(candidate));
     };
 
-    // 能读成拼音的输入优先让精确匹配占槽位：把它挪到英文组最前；没有精确匹配时占槽位的是补全词。
+    // 完全匹配的英文优先占槽位：把它挪到英文组最前；没有完全匹配时占槽位的是补全词。
     const bool english_takes_slot = !english_candidates.empty();
+    bool has_exact_english = false;
     bool completion_takes_slot = false;
-    if (english_takes_slot && english_placement.require_exact)
+    if (english_takes_slot)
     {
         const auto exact =
             std::find_if(english_candidates.begin(), english_candidates.end(),
                          [&](const WordItem &item) { return IsExactEnglishMatch(item, english_placement); });
-        completion_takes_slot = exact == english_candidates.end();
-        if (!completion_takes_slot)
+        has_exact_english = exact != english_candidates.end();
+        // 占槽位的是补全词而不是完全匹配时，才要把它退到首页末位。读不成拼音的输入本来就没有
+        // 中文候选跟它争，补全词与完全匹配的区分不起作用。
+        completion_takes_slot = english_placement.require_exact && !has_exact_english;
+        if (has_exact_english)
             std::rotate(english_candidates.begin(), exact, exact + 1);
     }
 
@@ -263,6 +272,13 @@ inline void NormalizeMixedCandidateOrder(std::vector<WordItem> &items, size_t lo
     std::optional<size_t> target = english_placement.slot;
     if (!target && completion_takes_slot)
         target = english_placement.page_size > 0 ? english_slot_maximum : items.size();
+    // 打出的字母有完全匹配的英文、又没有任何中文词库行的匹配码等于这串输入（选它能把候选框
+    // 整个清空）时，英文顶到首位
+    // （首位有快捷短语组时排在组后面，组不被拆开）。只有完全匹配才置顶，补全词（zai → zaire）
+    // 不算：它是「打这几个字母还想打更长」的猜测，不是这串字母本身。学到的槽位是用户用选择
+    // 表达过的偏好，优先于这次置顶。
+    if (!target && has_exact_english && !english_placement.chinese_exact_match)
+        target = 0;
     if (english_index && target && items[*english_index].fixed_position == 0)
     {
         target = (std::min)(*target, english_slot_maximum);

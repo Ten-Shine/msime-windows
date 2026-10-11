@@ -94,26 +94,9 @@ std::string series_cache_key(const std::string &raw_input, const std::string &se
     return prefix + (segmentation.empty() ? raw_input : segmentation);
 }
 
-// Folds letters for autocorrect comparisons: lowercases and strips manual
-// delimiters. v and u must compare as distinct letters — the ü-style alias
-// rewrite is a first-class marking source (the trailing star badge), so
-// 'nve' (primary segmentation) differing from typed 'nue' is exactly what
-// produces the corrected_from label. The old contract ("aliases never look
-// rewritten, hence never marked") was flipped by product decision.
-std::string fold_autocorrect_letters(const std::string &text)
-{
-    std::string folded;
-    folded.reserve(text.size());
-    for (const char ch : text)
-    {
-        if (ch == '\'')
-        {
-            continue;
-        }
-        folded.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    return folded;
-}
+// 折字母的规则只有 quanpin::fold_autocorrect_letters 一份：字面整词、纠错标记、备选切分
+// 比对的是同一串字母，不能各折各的。
+using quanpin::fold_autocorrect_letters;
 
 // How many ranked correction cuts feed the query pipeline: the primary cut
 // becomes the query key and the rest ride along as alternative segmentations
@@ -291,14 +274,13 @@ std::string candidate_letters(const WordItem &item)
     return fold_autocorrect_letters(item.canonical_pinyin.empty() ? item.pinyin : item.canonical_pinyin);
 }
 
-// 字面整词：词库行、读音字母与敲的字母逐个相同（任一种切分都算）。
+// 字面整词：词库行、整串读音字母恰好等于整串敲的字母（选它能把候选框清空；
+// 只认整串相等，拦腰的前缀部分匹配不算）。
 std::vector<WordItem>::iterator find_literal_whole_word(std::vector<WordItem> &candidates, const std::string &raw_input)
 {
     const std::string typed = fold_autocorrect_letters(raw_input);
-    return std::find_if(candidates.begin(), candidates.end(), [&](const WordItem &item) {
-        return (item.source == CandidateSource::Database || item.source == CandidateSource::UserDatabase) &&
-               candidate_letters(item) == typed;
-    });
+    return std::find_if(candidates.begin(), candidates.end(),
+                        [&](const WordItem &item) { return quanpin::is_literal_whole_word(item, typed); });
 }
 
 void keep_literal_whole_word_first(std::vector<WordItem> &candidates, const std::string &raw_input)

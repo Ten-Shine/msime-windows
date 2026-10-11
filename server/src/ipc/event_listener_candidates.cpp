@@ -18,6 +18,7 @@
 #include "global/globals.h"
 #include "engine/common/helpcode_utils.h"
 #include "engine/quanpin/quanpin_query.h"
+#include "engine/quanpin/quanpin_utils.h"
 #include "engine/user_dictionary/user_dictionary_journal.h"
 #include "cloud/cloud_translation.h"
 #include "english/english_ime.h"
@@ -516,6 +517,24 @@ int EnglishSlotMaximum()
     return (std::max)(GetConfiguredCandidatePageSize() - 1, 1);
 }
 
+// 中文完全匹配比的是「读音字母」，敲的字母要先换成全拼：双拼敲的是码（zl → 在），全拼敲的
+// 就是读音。两种方案下候选的 canonical_pinyin 都是全拼，折一次再逐个比。
+std::string ChineseReadingLetters()
+{
+    std::string reading = g_inputSession->get_quanpin();
+    if (reading.empty())
+        reading = g_inputSession->get_pinyin_segmentation();
+    return quanpin::fold_autocorrect_letters(reading);
+}
+
+bool HasExactChineseCandidate(const std::vector<WordItem> &items, const std::string &reading_letters)
+{
+    if (reading_letters.empty())
+        return false;
+    return std::any_of(items.begin(), items.end(),
+                       [&](const WordItem &item) { return quanpin::is_literal_whole_word(item, reading_letters); });
+}
+
 FanyImeIpc::EnglishPlacement CurrentEnglishPlacement(const std::vector<WordItem> &items)
 {
     FanyImeIpc::EnglishPlacement placement;
@@ -528,6 +547,7 @@ FanyImeIpc::EnglishPlacement CurrentEnglishPlacement(const std::vector<WordItem>
         return placement;
     placement.input = EnglishInputKey();
     placement.require_exact = g_inputSession->reads_as_pinyin();
+    placement.chinese_exact_match = HasExactChineseCandidate(items, ChineseReadingLetters());
     // 调频关闭时不用学到的槽位，英文回到默认位置。
     if (GetConfiguredFrequencyAdjustment().mode != "disabled")
     {
