@@ -281,16 +281,26 @@ WCHAR CCompositionProcessorEngine::GetSmartPunctuationAscii(WCHAR chinese)
     return 0;
 }
 
-std::wstring CCompositionProcessorEngine::ResolvePunctuation(WCHAR wch, WCHAR precedingChar)
+std::wstring CCompositionProcessorEngine::ResolvePunctuation(WCHAR wch, WCHAR precedingInputChar)
 {
     // Direct ASCII output is opt-in (smart_punctuation_direct_digit and
     // smart_punctuation_direct_letter, both default off): the default path
     // leaves ',' '.' ':' to the reversible space conversion.
+    //
+    // precedingInputChar must be the last character that actually reached the
+    // application as a clean input (the smart-punctuation shadow), NOT the
+    // character merely sitting left of the caret in the document. Callers pass
+    // 0 whenever the immediately preceding input was a composition, navigation,
+    // or deletion, so the direct sub-switch fires only when the punctuation is
+    // typed right after a digit/letter key. Example: typing '1' then a pinyin
+    // letter (which opens the candidate box) then dismissing it leaves '1' in
+    // the document, but the shadow is gone, so the next punctuation stays
+    // Chinese instead of being forced to ASCII.
     if (Global::SmartPunctuationEnabled.load(std::memory_order_relaxed) && IsSmartAsciiPunctuationKey(wch))
     {
-        const bool afterDigit = precedingChar >= L'0' && precedingChar <= L'9';
-        const bool afterLetter =
-            (precedingChar >= L'A' && precedingChar <= L'Z') || (precedingChar >= L'a' && precedingChar <= L'z');
+        const bool afterDigit = precedingInputChar >= L'0' && precedingInputChar <= L'9';
+        const bool afterLetter = (precedingInputChar >= L'A' && precedingInputChar <= L'Z') ||
+                                 (precedingInputChar >= L'a' && precedingInputChar <= L'z');
         if ((afterDigit && Global::SmartPunctuationDirectDigitEnabled.load(std::memory_order_relaxed)) ||
             (afterLetter && Global::SmartPunctuationDirectLetterEnabled.load(std::memory_order_relaxed)))
         {

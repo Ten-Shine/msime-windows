@@ -926,7 +926,16 @@ std::wstring CMetasequoiaIME::_ResolveSmartPunctuation(WCHAR wch, WCHAR precedin
     _ClearSmartPunctuationAction();
 
     const bool smartEnabled = Global::SmartPunctuationEnabled.load(std::memory_order_relaxed);
-    std::wstring resolved = _pCompositionProcessorEngine->ResolvePunctuation(wch, precedingChar);
+
+    // The direct-ASCII decision must follow the last *input* key, not the
+    // character left of the caret. Use the smart-punctuation shadow (the last
+    // clean input that reached the app); when it is invalid the preceding input
+    // was a composition, navigation, or deletion, so there is no digit/letter
+    // to follow and the punctuation stays Chinese. When the shadow is valid its
+    // character is precisely the last committed input, which is what the "after
+    // digit/letter" rule should test against.
+    const WCHAR precedingInputChar = _smartPunctuationShadowValid ? _smartPunctuationShadowChar : 0;
+    std::wstring resolved = _pCompositionProcessorEngine->ResolvePunctuation(wch, precedingInputChar);
     if (!CCompositionProcessorEngine::IsSmartAsciiPunctuationKey(wch) || !smartEnabled)
     {
         if (!resolved.empty())
