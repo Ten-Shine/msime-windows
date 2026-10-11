@@ -136,7 +136,9 @@ class CCompositionProcessorEngine
     // Smart punctuation (rime digit_separators-style): after ASCII letters/digits,
     // keep ',' '.' ':' as ASCII instead of mapping to Chinese punctuation.
     static BOOL IsSmartAsciiPunctuationKey(WCHAR wch);
-    std::wstring ResolvePunctuation(WCHAR wch, WCHAR precedingChar);
+    // precedingInputChar must be the last character that reached the app as a
+    // clean input (the smart-punctuation shadow), never the raw document char.
+    std::wstring ResolvePunctuation(WCHAR wch, WCHAR precedingInputChar);
     // Reversible smart punctuation mapping (Chinese form -> ASCII form). Each
     // symbol on its own maps; an auto-completed pair never arms the conversion.
     static bool IsSmartPunctuationChinese(WCHAR ch);
