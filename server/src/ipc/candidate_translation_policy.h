@@ -27,9 +27,9 @@ constexpr bool IsTranslationCommitKey(uint32_t keycode, uint32_t modifiers_down)
 // space ("n." -> 2), or 0 when the sense has no label.
 inline size_t PartOfSpeechLabelLength(std::string_view sense)
 {
-    static constexpr std::string_view kLabels[] = {"proper n. ", "interj. ", "idiom. ", "pron. ", "prep. ",
-                                                   "conj. ",     "adj. ",    "adv. ",   "num. ",  "det. ",
-                                                   "aux. ",      "n. ",      "v. "};
+    static constexpr std::string_view kLabels[] = {"proper n. ", "interj. ", "idiom. ", "pron. ", "prep. ", "conj. ",
+                                                   "adj. ",      "adv. ",    "num. ",   "det. ",  "aux. ",  "n. ",
+                                                   "v. ",        "phr. ",    "int. ",   "part. "};
     for (const auto label : kLabels)
     {
         if (sense.size() > label.size() && sense.substr(0, label.size()) == label)
