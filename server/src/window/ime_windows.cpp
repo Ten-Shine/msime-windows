@@ -5,6 +5,7 @@
 #include "window/candidate_presenter.h"
 #include "window/floating_toolbar_presenter.h"
 #include "window/tray_menu_presenter.h"
+#include "window/window_opacity_policy.h"
 #include "defines/defines.h"
 #include "defines/globals.h"
 #include <algorithm>
@@ -55,6 +56,18 @@ double g_clip_envelope_right_dip = 0.0;
 // the suggested rect or re-entering FineTune from that handler races the hide
 // park and can recurse until the UI thread stalls — seen when switching apps.
 int g_candidate_dpi_change_suppress_count = 0;
+// Last frame actually painted, used to drop duplicate shows. Cleared on hide so
+// the next session always paints.
+std::wstring g_last_rendered_candidate_signature;
+ULONGLONG g_last_rendered_candidate_tick = 0;
+// 候选窗渐变状态（不透明度调节 / 隐藏淡出）。All on the UI thread, like the
+// applies; the hide fade keeps ::is_global_wnd_cand_shown true until it lands,
+// so a show inside the fade cancels it instead of racing the teardown.
+CandidateFadeKind g_candidate_fade_kind = CandidateFadeKind::None;
+ULONGLONG g_candidate_fade_start = 0;
+BYTE g_candidate_fade_from = 255;
+BYTE g_candidate_fade_target = 255;
+BYTE g_candidate_current_alpha = 255;
 
 // WM_SETTINGCHANGE lParam points to "ImmersiveColorSet" when the user flips
 // the Windows app light/dark theme. Only meaningful for the D2D presenters:
@@ -213,6 +226,187 @@ void SetCandidateHostCloaked(bool cloaked)
     SetHostWindowCloaked(::global_hwnd, cloaked);
 }
 
+namespace
+{
+
+BYTE CandidateWindowBaseAlpha()
+{
+    // D2D 端前景/背景不透明度落在绘制颜色里（CandidatePresenter::ApplySkin），窗口级
+    // alpha 只服务隐藏淡出，基准是"不压"。这里若返回背景不透明度，整帧——候选文字
+    // 也在里面——都会乘上它，把背景调到 1% 就等于把前景也调到 1%。
+    // WebView2 端没有前景/背景之分：整窗一个 alpha，取"背景不透明度"作为窗口的
+    // 通透程度（前景不透明度在 WebView2 下无效）。
+    return FanyImeUi::WindowOpacityBaseAlpha(UseD2dSmallWindowUi(), GetConfiguredCandidateWindowBackgroundOpacity());
+}
+
+// 两种后端各一条写入路径：WebView2 宿主持分层窗口，直接改 LWA_ALPHA；D2D 端
+// 没有重定向位图，整帧不透明度由 presenter 用一层 D2D 图层画出来。
+// 两条路径都只写"整帧"alpha，调用方要么在跑渐变，要么在把 alpha 放回
+// CandidateWindowBaseAlpha()——不要在这里传前景/背景不透明度。
+// g_candidate_current_alpha 记录最后一次写入的值，渐变从它起步。
+void SetCandidateHostAlpha(BYTE alpha)
+{
+    g_candidate_current_alpha = alpha;
+    if (UseD2dSmallWindowUi())
+    {
+        CandidatePresenter::Instance().SetFrameOpacity(static_cast<float>(alpha) / 255.0f);
+        return;
+    }
+    SetLayeredWindowAttributes(::global_hwnd, 0, alpha, LWA_ALPHA);
+}
+
+} // namespace
+
+namespace ime_windows_detail
+{
+
+void BeginCandidateFade(BYTE target, CandidateFadeKind kind)
+{
+    if (!::global_hwnd)
+    {
+        return;
+    }
+    // 只有同一种渐变允许在路上改目标（连续调节不透明度时从当前值重新起步）；
+    // 隐藏淡出进行中再调不透明度没有意义——窗口正要消失，新值由收尾放回。
+    if (g_candidate_fade_kind != CandidateFadeKind::None && g_candidate_fade_kind != kind)
+    {
+        return;
+    }
+    g_candidate_fade_kind = kind;
+    g_candidate_fade_start = GetTickCount64();
+    g_candidate_fade_from = g_candidate_current_alpha;
+    g_candidate_fade_target = target;
+    SetTimer(::global_hwnd, TIMER_ID_CANDIDATE_HIDE_FADE, kFloatingToolbarAutoHideFadeStepMs, nullptr);
+}
+
+void CancelCandidateFade()
+{
+    if (g_candidate_fade_kind == CandidateFadeKind::None)
+    {
+        return;
+    }
+    if (::global_hwnd)
+    {
+        KillTimer(::global_hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+    }
+    g_candidate_fade_kind = CandidateFadeKind::None;
+    SetCandidateHostAlpha(CandidateWindowBaseAlpha());
+}
+
+void StepCandidateFade(HWND hwnd)
+{
+    if (g_candidate_fade_kind == CandidateFadeKind::None)
+    {
+        KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - g_candidate_fade_start;
+    const UINT fadeMs = g_candidate_fade_kind == CandidateFadeKind::Hide ? kCandidateHideFadeMs : kWindowOpacityFadeMs;
+    if (elapsed < fadeMs)
+    {
+        SetCandidateHostAlpha(
+            FanyImeUi::WindowFadeAlpha(g_candidate_fade_from, g_candidate_fade_target, elapsed, fadeMs));
+        return;
+    }
+    KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+    if (g_candidate_fade_kind == CandidateFadeKind::Hide)
+    {
+        g_candidate_fade_kind = CandidateFadeKind::None;
+        SetCandidateHostAlpha(0);
+        ApplyCandidateHideNow(hwnd);
+        return;
+    }
+    // 不透明度渐变：落在新的基准值上即结束。
+    g_candidate_fade_kind = CandidateFadeKind::None;
+    SetCandidateHostAlpha(g_candidate_fade_target);
+}
+
+void ApplyCandidateHideNow(HWND hwnd)
+{
+    // 渐变中的话到这儿结束：宿主即将被 cloak，alpha 放回基准值——不放回的
+    // 话下一次 show 会从 0（看不见）开始。
+    if (g_candidate_fade_kind != CandidateFadeKind::None)
+    {
+        KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+        g_candidate_fade_kind = CandidateFadeKind::None;
+    }
+    ::is_global_wnd_cand_shown = false;
+    Global::SetCandidateWindowRenderedVisible(false);
+    g_last_rendered_candidate_signature.clear();
+    KillTimer(hwnd, TIMER_ID_CANDIDATE_MOVE_SETTLE);
+    g_candidate_session_anchor_valid = false;
+    ++g_candidate_content_generation;
+    g_candidate_layout_inflight.store(false);
+    ++g_candidate_finetune_generation;
+    Global::MarginTop = 0;
+    Global::MarginLeft = 0;
+    g_has_last_candidate_clip = false;
+    ResetCandidatePlacementMemory();
+    {
+        SuppressCandidateDpiChange suppressDpi;
+        if (CandidatePresenter::Instance().IsBound())
+        {
+            CandidatePresenter::Instance().Hide();
+        }
+        else if (!webviewControllerCandWnd)
+        {
+            // Moving this HWND while CreateCoreWebView2Controller is in
+            // flight makes the candidate controller fail (menu/FTB still work).
+            SetHostWindowCloaked(hwnd, true);
+        }
+        else
+        {
+            ClearCandidateWindowRegion(hwnd);
+            // Park off-screen but keep the stable quarter-screen host size.
+            // Shrinking back to the default card size made the next show race
+            // put_Bounds / margins against a tiny HWND and park the card at
+            // the monitor's left edge.
+            const auto parkHost = ComputeQuarterScreenHostPixels(GetMainMonitorCoordinates());
+            SetWindowPos(hwnd, HWND_TOP, 0, Global::INVALID_Y, parkHost.first, parkHost.second, SWP_SHOWWINDOW);
+            SetHostWindowCloaked(hwnd, true);
+            UpdateHtmlContentWithJavaScript(webviewCandWnd, L"");
+        }
+    }
+    // 收尾后放回基准不透明度：宿主已 cloak 或移出屏幕，这一步不可见。
+    SetCandidateHostAlpha(CandidateWindowBaseAlpha());
+}
+
+} // namespace ime_windows_detail
+
+void ApplyConfiguredCandidateWindowOpacity()
+{
+    if (!::global_hwnd)
+    {
+        return;
+    }
+    if (UseD2dSmallWindowUi())
+    {
+        // D2D：前景/背景不透明度落在绘制颜色里（CandidatePresenter::ApplySkin），
+        // 重新套一遍皮肤即生效——与字号、字体这些外观项一致，没有渐变：D2D 宿主
+        // 没有窗口级 alpha 可用，整帧淡出只留给隐藏。
+        CandidatePresenter::Instance().ApplySkin();
+        if (::is_global_wnd_cand_shown)
+        {
+            CandidatePresenter::Instance().Present();
+        }
+        return;
+    }
+    // 没上过屏（启动、驻留、暖机）直接落值：淡了也看不见，还会把启动路径
+    // 拖慢。上着屏才从当前值渐变过去。
+    if (!::is_global_wnd_cand_shown || !IsCandidateHostPaintedVisible(::global_hwnd))
+    {
+        if (g_candidate_fade_kind != CandidateFadeKind::None)
+        {
+            KillTimer(::global_hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+            g_candidate_fade_kind = CandidateFadeKind::None;
+        }
+        SetCandidateHostAlpha(CandidateWindowBaseAlpha());
+        return;
+    }
+    BeginCandidateFade(CandidateWindowBaseAlpha(), CandidateFadeKind::Opacity);
+}
+
 std::wstring DescribeCandidateHostState()
 {
     bool webview_visible = false;
@@ -369,6 +563,9 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     {
         PrepareLayeredHostWindow(hwnd_cand);
     }
+    // PrepareLayeredHostWindow leaves the host fully opaque; apply the
+    // configured opacity before the first show either way.
+    ApplyConfiguredCandidateWindowOpacity();
     CAND_DIAG_LOGF(L"candidate host created backend={} {}", d2dUi ? L"d2d" : L"webview2", DescribeCandidateHostState());
 
     // A client can activate while the pipe server is already listening but this
@@ -471,6 +668,9 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     {
         FloatingToolbarPresenter::Instance().Bind(hwnd_ftb);
     }
+    // PrepareLayeredHostWindow leaves the host fully opaque; apply the
+    // configured opacity before the first show either way.
+    ApplyConfiguredFloatingToolbarOpacity();
 
     // Cloaked show: WebView2 sees a visible on-monitor host; the user does not.
     WarmupHostWindowCloaked(hwnd_cand);

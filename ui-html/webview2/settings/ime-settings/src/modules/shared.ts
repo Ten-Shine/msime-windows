@@ -497,6 +497,14 @@ export function applyDropdownValue(btnId: string, menuId: string, value: string 
   }
 }
 
+// 与 UiBackendPolicy::Resolve 同一条判定：只有显式写了 webview2 / web / webview 才是
+// WebView2，其余（含空值、未知值、旧配置）都落原生 D2D。
+// 用途是设置页里那几个"分不开前景/背景"的选项：WebView2 宿主只有整窗一个 alpha，
+// 前景不透明度对它无效，所以那边只该显示一个不透明度选项。
+export function isWebView2UiBackend(backend: string | undefined): boolean {
+  return backend === 'webview2' || backend === 'webview' || backend === 'web';
+}
+
 // Rows styled up front when the menu is built; the rest wait until scrolled into view.
 const FONT_PREVIEW_EAGER_ROWS = 12;
 

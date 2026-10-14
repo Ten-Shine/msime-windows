@@ -12,6 +12,80 @@
       </div>
     </div>
 
+    <!-- 不透明度：D2D 端前景/背景各压各的绘制颜色，两个选项；WebView2 端宿主只有
+         整窗一个 alpha（取背景不透明度），前景那个对它无效，所以整块收成一个选项。
+         两块的显隐由 ui_backend 决定，见 floating-toolbar.ts 的
+         applyFloatingToolbarOpacityRows。 -->
+    <div id="ftbOpacitySplitRows">
+      <div class="section-header floating-toolbar-setting-row ftb-opacity-row">
+        <div>
+          <div class="section-title caret-state-option-title">工具栏背景不透明度</div>
+        </div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="ftbBackgroundOpacityDecBtn" aria-label="减少 1% 背景不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="ftbBackgroundOpacityInput" inputmode="numeric" value="100" aria-label="工具栏背景不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="ftbBackgroundOpacityIncBtn" aria-label="增加 1% 背景不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+
+      <div class="section-header floating-toolbar-setting-row ftb-fg-opacity-row">
+        <div>
+          <div class="section-title caret-state-option-title">工具栏前景不透明度</div>
+        </div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="ftbForegroundOpacityDecBtn" aria-label="减少 1% 前景不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="ftbForegroundOpacityInput" inputmode="numeric" value="100" aria-label="工具栏前景不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="ftbForegroundOpacityIncBtn" aria-label="增加 1% 前景不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="ftbOpacitySingleRow" hidden>
+      <div class="section-header floating-toolbar-setting-row ftb-opacity-row">
+        <div>
+          <div class="section-title caret-state-option-title">工具栏不透明度</div>
+        </div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="ftbOpacityDecBtn" aria-label="减少 1% 不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="ftbOpacityInput" inputmode="numeric" value="100" aria-label="工具栏不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="ftbOpacityIncBtn" aria-label="增加 1% 不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-header floating-toolbar-setting-row ftb-auto-dim-row">
+      <div>
+        <div class="section-title caret-state-option-title">自动降低不透明度</div>
+        <div class="floating-toolbar-description">工具栏显示一段时间无交互后降低不透明度；鼠标悬停时不降低，切换中英等状态变化时回到原不透明度。</div>
+      </div>
+      <div class="ftb-toggle-btn" id="ftbAutoDimToggleBtn" role="switch" aria-label="自动降低不透明度" aria-checked="false" tabindex="0">
+        <div class="ftb-toggle-knob"></div>
+      </div>
+    </div>
+
+    <div class="section-header floating-toolbar-setting-row ftb-auto-dim-opacity-row is-disabled" id="ftbAutoDimOpacityRow">
+      <div>
+        <div class="section-title caret-state-option-title">无交互后的不透明度</div>
+      </div>
+      <div class="number-stepper">
+        <button type="button" class="number-stepper-btn" id="ftbAutoDimOpacityDecBtn" aria-label="减少 1% 不透明度" tabindex="-1">−</button>
+        <input type="text" class="number-stepper-input" id="ftbAutoDimOpacityInput" inputmode="numeric" value="50" aria-label="无交互后的不透明度（百分比）" tabindex="-1">
+        <button type="button" class="number-stepper-btn" id="ftbAutoDimOpacityIncBtn" aria-label="增加 1% 不透明度" tabindex="-1">+</button>
+      </div>
+    </div>
+
+    <div class="section-header floating-toolbar-setting-row ftb-auto-dim-delay-row is-disabled" id="ftbAutoDimDelayRow">
+      <div>
+        <div class="section-title caret-state-option-title">自动降低不透明度延时</div>
+        <div class="floating-toolbar-description">工具栏显示多久后开始降低不透明度（秒）</div>
+      </div>
+      <div class="number-stepper">
+        <button type="button" class="number-stepper-btn" id="ftbAutoDimDelayDecBtn" aria-label="减少 1 秒" tabindex="-1">−</button>
+        <input type="text" class="number-stepper-input" id="ftbAutoDimDelayInput" inputmode="numeric" value="5" aria-label="自动降低不透明度延时（秒）" tabindex="-1">
+        <button type="button" class="number-stepper-btn" id="ftbAutoDimDelayIncBtn" aria-label="增加 1 秒" tabindex="-1">+</button>
+      </div>
+    </div>
+
     <div class="section-header floating-toolbar-setting-row ftb-auto-hide-row">
       <div>
         <div class="section-title caret-state-option-title">自动隐藏工具栏</div>

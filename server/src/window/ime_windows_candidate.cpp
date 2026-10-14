@@ -29,10 +29,6 @@ std::atomic<bool> g_candidate_force_layout{false};
 // A WM_HIDE_MAIN_WINDOW is armed on TIMER_ID_CANDIDATE_HIDE_GRACE rather than
 // applied straight away; a show inside the grace window cancels it.
 bool g_candidate_hide_pending = false;
-// Last frame actually painted, used to drop duplicate shows. Cleared on hide so
-// the next session always paints.
-std::wstring g_last_rendered_candidate_signature;
-ULONGLONG g_last_rendered_candidate_tick = 0;
 } // namespace
 
 LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -102,10 +98,22 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             CAND_DIAG_LOGF(L"candidate-frame path=exclusive-fullscreen shown={}", ::is_global_wnd_cand_shown);
             if (::is_global_wnd_cand_shown)
             {
-                return WndProcCandWindow(hwnd, WM_HIDE_MAIN_WINDOW, 0, 0);
+                // 独占全屏一帧都不能多：不走淡出，直接收尾。
+                ApplyCandidateHideNow(hwnd);
             }
-            Global::SetCandidateWindowRenderedVisible(false);
+            else
+            {
+                Global::SetCandidateWindowRenderedVisible(false);
+            }
             return 0;
+        }
+        // 隐藏淡出途中收到 show：取消淡出并把 alpha 拉回基准，否则窗口会以
+        // 中间透明度上屏，淡完还会把刚要显示的候选藏掉。不透明度调节渐变
+        // 不拦——让它自然结束更顺。
+        if (g_candidate_fade_kind == CandidateFadeKind::Hide)
+        {
+            CAND_DIAG_LOGF(L"candidate-frame hide-fade cancelled by show {}", DescribeCandidateHostState());
+            CancelCandidateFade();
         }
         const uint64_t contentGeneration = ++g_candidate_content_generation;
         const ULONGLONG updateStartedTick = GetTickCount64();
@@ -290,44 +298,31 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
         KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_GRACE);
         g_candidate_hide_pending = false;
         CAND_DIAG_LOGF(L"hide message begin {}", DescribeCandidateHostState());
-        ::is_global_wnd_cand_shown = false;
-        Global::SetCandidateWindowRenderedVisible(false);
-        g_last_rendered_candidate_signature.clear();
-        KillTimer(hwnd, TIMER_ID_CANDIDATE_MOVE_SETTLE);
-        g_candidate_session_anchor_valid = false;
-        ++g_candidate_content_generation;
-        g_candidate_layout_inflight.store(false);
-        ++g_candidate_finetune_generation;
-        Global::MarginTop = 0;
-        Global::MarginLeft = 0;
-        g_has_last_candidate_clip = false;
-        ResetCandidatePlacementMemory();
+        // 有画面可淡时才淡出：淡出期间保持 shown 与页面内容，淡完由定时器
+        // 走同一套收尾。已经挂在淡出上（重复 hide 被它吸收）、本来就没上过
+        // 屏（暖机/驻留，收了半天尾也没什么可淡）都直接收尾；独占全屏在
+        // show 路径已经挡掉，这里再兜一层。
+        if (::is_global_wnd_cand_shown && IsCandidateHostPaintedVisible(hwnd) && !IsForegroundD3DExclusiveFullscreen())
         {
-            SuppressCandidateDpiChange suppressDpi;
-            if (CandidatePresenter::Instance().IsBound())
+            if (g_candidate_fade_kind == CandidateFadeKind::Hide)
             {
-                CandidatePresenter::Instance().Hide();
+                CAND_DIAG_LOGF(L"hide folded into in-flight fade {}", DescribeCandidateHostState());
+                return 0;
             }
-            else if (!webviewControllerCandWnd)
-            {
-                // Moving this HWND while CreateCoreWebView2Controller is in
-                // flight makes the candidate controller fail (menu/FTB still work).
-                SetHostWindowCloaked(hwnd, true);
-            }
-            else
-            {
-                ClearCandidateWindowRegion(hwnd);
-                // Park off-screen but keep the stable quarter-screen host size.
-                // Shrinking back to the default card size made the next show race
-                // put_Bounds / margins against a tiny HWND and park the card at
-                // the monitor's left edge.
-                const auto parkHost = ComputeQuarterScreenHostPixels(GetMainMonitorCoordinates());
-                SetWindowPos(hwnd, HWND_TOP, 0, Global::INVALID_Y, parkHost.first, parkHost.second, SWP_SHOWWINDOW);
-                SetHostWindowCloaked(hwnd, true);
-                UpdateHtmlContentWithJavaScript(webviewCandWnd, L"");
-            }
+            // 不透明度调节渐变进行中：从基准值开始淡出（取消即拉回基准）。
+            CancelCandidateFade();
+            BeginCandidateFade(0, CandidateFadeKind::Hide);
+            CAND_DIAG_LOGF(L"hide fade started {}", DescribeCandidateHostState());
+            return 0;
         }
+        ApplyCandidateHideNow(hwnd);
         CAND_DIAG_LOGF(L"hide message end {}", DescribeCandidateHostState());
+        return 0;
+    }
+
+    if (message == WM_TIMER && wParam == TIMER_ID_CANDIDATE_HIDE_FADE)
+    {
+        StepCandidateFade(hwnd);
         return 0;
     }
 
@@ -526,6 +521,11 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const bool previous_floating_toolbar_auto_hide = GetConfiguredFloatingToolbarAutoHide();
             const int previous_floating_toolbar_auto_hide_delay = GetConfiguredFloatingToolbarAutoHideDelay();
             const bool previous_floating_toolbar_shadow = GetConfiguredFloatingToolbarShadow();
+            const int previous_floating_toolbar_background_opacity = GetConfiguredFloatingToolbarBackgroundOpacity();
+            const int previous_floating_toolbar_foreground_opacity = GetConfiguredFloatingToolbarForegroundOpacity();
+            const bool previous_floating_toolbar_auto_dim = GetConfiguredFloatingToolbarAutoDim();
+            const int previous_floating_toolbar_auto_dim_opacity = GetConfiguredFloatingToolbarAutoDimOpacity();
+            const int previous_floating_toolbar_auto_dim_delay = GetConfiguredFloatingToolbarAutoDimDelay();
             const bool previous_cloud_candidates = GetConfiguredCloudCandidatesEnabled();
             const bool previous_comma_period = GetConfiguredPagingCommaPeriodEnabled();
             const bool previous_smart_punctuation = GetConfiguredSmartPunctuationEnabled();
@@ -557,6 +557,8 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
             const int previous_font_size = GetConfiguredCandidateFontSize();
             const int previous_preedit_font_size = GetConfiguredCandidateWindowPreeditFontSize();
             const std::string previous_cand_text_color = GetConfiguredCandidateTextColor();
+            const int previous_candidate_window_background_opacity = GetConfiguredCandidateWindowBackgroundOpacity();
+            const int previous_candidate_window_foreground_opacity = GetConfiguredCandidateWindowForegroundOpacity();
             const VoiceInputConfig previous_voice_input = GetConfiguredVoiceInput();
             if (ReloadImeConfigIfChanged())
             {
@@ -597,6 +599,13 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 {
                     ApplyConfiguredCandidateAppearance();
                 }
+                // 不透明度不需要重建候选页：D2D 端重套皮肤即生效，WebView2 端是
+                // 窗口属性，改完即生效。
+                if (previous_candidate_window_background_opacity != GetConfiguredCandidateWindowBackgroundOpacity() ||
+                    previous_candidate_window_foreground_opacity != GetConfiguredCandidateWindowForegroundOpacity())
+                {
+                    ApplyConfiguredCandidateWindowOpacity();
+                }
                 if (::is_global_wnd_cand_shown &&
                     (previous_layout != GetConfiguredCandidateWindowLayout() ||
                      previous_fit_content != GetConfiguredCandidateWindowFitContent() ||
@@ -622,7 +631,9 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     SyncMenuFloatingToolbarToggle();
                 }
                 else if (previous_floating_toolbar_auto_hide != GetConfiguredFloatingToolbarAutoHide() ||
-                         previous_floating_toolbar_auto_hide_delay != GetConfiguredFloatingToolbarAutoHideDelay())
+                         previous_floating_toolbar_auto_hide_delay != GetConfiguredFloatingToolbarAutoHideDelay() ||
+                         previous_floating_toolbar_auto_dim != GetConfiguredFloatingToolbarAutoDim() ||
+                         previous_floating_toolbar_auto_dim_delay != GetConfiguredFloatingToolbarAutoDimDelay())
                 {
                     RestartFloatingToolbarAutoHide(L"config-sync-auto-hide");
                 }
@@ -640,6 +651,12 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
                          previous_floating_toolbar_shadow != GetConfiguredFloatingToolbarShadow())
                 {
                     ApplyConfiguredFloatingToolbarSize();
+                }
+                if (previous_floating_toolbar_background_opacity != GetConfiguredFloatingToolbarBackgroundOpacity() ||
+                    previous_floating_toolbar_foreground_opacity != GetConfiguredFloatingToolbarForegroundOpacity() ||
+                    previous_floating_toolbar_auto_dim_opacity != GetConfiguredFloatingToolbarAutoDimOpacity())
+                {
+                    ApplyConfiguredFloatingToolbarOpacity();
                 }
                 if (previous_cloud_candidates && !GetConfiguredCloudCandidatesEnabled())
                     FanyNamedPipe::CancelCloudCandidateRequest();

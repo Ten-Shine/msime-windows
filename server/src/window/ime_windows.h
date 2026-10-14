@@ -25,6 +25,12 @@ RECT GetTrayMenuAnchorRect();
 LRESULT CALLBACK WndProcFtbWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 void SetCandidateHostCloaked(bool cloaked);
+// Push the configured candidate-window opacity onto the host. The WebView2
+// backend hosts a layered window, so the alpha is a window attribute; the D2D
+// backend has no redirection bitmap and paints the foreground/background
+// opacity into the drawn colors instead (CandidatePresenter::ApplySkin), so it
+// re-applies the skin and repaints. Both take effect without a relayout.
+void ApplyConfiguredCandidateWindowOpacity();
 // reason identifies the trigger in the floating-toolbar diagnostic trace. The
 // whole class of bugs here is "nothing ever called this", so the caller has to
 // be recoverable from the log.
@@ -47,5 +53,9 @@ void RevealAutoHiddenFloatingToolbar(const wchar_t *reason);
 // WebView2 stopped compositing, and only these fields tell the two apart.
 std::wstring DescribeTrayMenuHostState();
 void ApplyConfiguredFloatingToolbarSize();
+// Apply the configured toolbar opacity (base value, or pull an in-flight /
+// parked dim back to it). Called at window creation and from the config sync
+// when an opacity setting changes.
+void ApplyConfiguredFloatingToolbarOpacity();
 void ApplyConfiguredInputScheme();
 void ApplyConfiguredShuangpinSchema();

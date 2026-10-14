@@ -193,6 +193,14 @@ const std::filesystem::path &GetImeConfigPath();
 const std::string &GetConfiguredSessionBackend();
 int GetConfiguredCandidatePageSize();
 bool SetConfiguredCandidatePageSize(int page_size);
+// 候选窗不透明度（百分比，1–100，100 = 完全不透明）。
+//   background：卡片填充、描边、高亮与悬停底色、阴影——D2D 端落在这些绘制颜色
+//     上；WebView2 端无法分层，整窗 alpha 取它（即"整体不透明度"）。
+//   foreground：候选文字、序号、译文等画在卡片之上的内容，仅 D2D 端生效。
+int GetConfiguredCandidateWindowBackgroundOpacity();
+bool SetConfiguredCandidateWindowBackgroundOpacity(int percent);
+int GetConfiguredCandidateWindowForegroundOpacity();
+bool SetConfiguredCandidateWindowForegroundOpacity(int percent);
 const std::string &GetConfiguredCandidateFont();
 bool SetConfiguredCandidateFont(const std::string &font);
 const std::string &GetConfiguredCandidateEnglishFont();
@@ -442,6 +450,21 @@ bool SetConfiguredFloatingToolbarAutoHideDelay(int seconds);
 // sit flush with a screen edge; the shadow margin may hang off the screen.
 bool GetConfiguredFloatingToolbarShadow();
 bool SetConfiguredFloatingToolbarShadow(bool enabled);
+// 悬浮工具栏不透明度（百分比，1–100，100 = 完全不透明）。语义同候选窗：
+// background 是卡片填充/描边/悬停底色/阴影（WebView2 端即整窗 alpha），
+// foreground 是图标与文字，仅 D2D 端生效。
+int GetConfiguredFloatingToolbarBackgroundOpacity();
+bool SetConfiguredFloatingToolbarBackgroundOpacity(int percent);
+int GetConfiguredFloatingToolbarForegroundOpacity();
+bool SetConfiguredFloatingToolbarForegroundOpacity(int percent);
+// 自动降低不透明度：显示一段时间无交互后降到 auto_dim_opacity；鼠标悬停时不
+// 降低，切换中英等状态变化时回到基准不透明度。
+bool GetConfiguredFloatingToolbarAutoDim();
+bool SetConfiguredFloatingToolbarAutoDim(bool enabled);
+int GetConfiguredFloatingToolbarAutoDimOpacity();
+bool SetConfiguredFloatingToolbarAutoDimOpacity(int percent);
+int GetConfiguredFloatingToolbarAutoDimDelay();
+bool SetConfiguredFloatingToolbarAutoDimDelay(int seconds);
 bool GetConfiguredEnglishCandidatesEnabled();
 bool SetConfiguredEnglishCandidatesEnabled(bool enabled);
 bool GetConfiguredCandidateTranslationsEnabled();

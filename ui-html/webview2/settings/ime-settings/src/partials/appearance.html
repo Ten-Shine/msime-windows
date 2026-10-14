@@ -253,6 +253,40 @@
         </div>
       </div>
     </div>
+    <!-- 不透明度：D2D 端前景/背景各压各的绘制颜色，两个选项；WebView2 端宿主只有
+         整窗一个 alpha（取背景不透明度），前景那个对它无效，所以整块收成一个选项。
+         两块的显隐由 ui_backend 决定，见 appearance.ts 的 applyCandidateOpacityRows。 -->
+    <div id="candOpacitySplitRows">
+      <div class="divider"></div>
+      <div class="section-header">
+        <div class="section-title">候选窗口背景不透明度</div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="candBackgroundOpacityDecBtn" aria-label="减少 1% 背景不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="candBackgroundOpacityInput" inputmode="numeric" value="100" aria-label="候选窗口背景不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="candBackgroundOpacityIncBtn" aria-label="增加 1% 背景不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="section-header">
+        <div class="section-title">候选窗口前景不透明度</div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="candForegroundOpacityDecBtn" aria-label="减少 1% 前景不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="candForegroundOpacityInput" inputmode="numeric" value="100" aria-label="候选窗口前景不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="candForegroundOpacityIncBtn" aria-label="增加 1% 前景不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+    </div>
+    <div id="candOpacitySingleRow" hidden>
+      <div class="divider"></div>
+      <div class="section-header">
+        <div class="section-title">候选窗口不透明度</div>
+        <div class="number-stepper">
+          <button type="button" class="number-stepper-btn" id="candOpacityDecBtn" aria-label="减少 1% 不透明度" tabindex="0">−</button>
+          <input type="text" class="number-stepper-input" id="candOpacityInput" inputmode="numeric" value="100" aria-label="候选窗口不透明度（百分比）" tabindex="0">
+          <button type="button" class="number-stepper-btn" id="candOpacityIncBtn" aria-label="增加 1% 不透明度" tabindex="0">+</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 主题模式（全局） -->

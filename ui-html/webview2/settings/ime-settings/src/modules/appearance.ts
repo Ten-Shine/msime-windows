@@ -2,11 +2,13 @@ import { serializeHostMessage } from '../../../../shared/messages';
 import {
   applyDropdownValue,
   applyToggleState,
+  isWebView2UiBackend,
   populateDropdownMenu,
   registerDropdownPreparer,
   setupDropdownMenu,
   setupToggleButton
 } from './shared';
+import { clampNumberStepperValue, renderNumberStepper, setupNumberStepper, type NumberStepperIds } from './number-stepper';
 import { loadHTML } from '../utils/common-utils';
 import { applyThemeConfig, setCandidateSurfaceThemeListener, type ResolvedTheme, type ThemeConfig } from './theme';
 
@@ -32,6 +34,8 @@ export type CandidateAppearanceConfig = {
   candidate_window_preedit_font_size?: number;
   cand_text_color?: string;
   page_size?: number;
+  candidate_window_background_opacity?: number;
+  candidate_window_foreground_opacity?: number;
   candidate_window_fit_content?: boolean;
   candidate_window_follow_cursor?: boolean;
   candidate_fixed_badge?: boolean;
@@ -67,6 +71,32 @@ let previewFontSize = 16;
 let previewPreeditFontSize = 16;
 let previewTextColor = 'auto';
 let previewPageSize = 6;
+// Mirrors kWindowOpacityPercent{Min,Max,Default} in the server config.
+const OPACITY_MIN = 1;
+const OPACITY_MAX = 100;
+const OPACITY_DEFAULT = 100;
+const CAND_BACKGROUND_OPACITY_IDS: NumberStepperIds = {
+  dec: 'candBackgroundOpacityDecBtn',
+  input: 'candBackgroundOpacityInput',
+  inc: 'candBackgroundOpacityIncBtn'
+};
+const CAND_FOREGROUND_OPACITY_IDS: NumberStepperIds = {
+  dec: 'candForegroundOpacityDecBtn',
+  input: 'candForegroundOpacityInput',
+  inc: 'candForegroundOpacityIncBtn'
+};
+// WebView2 渲染下的唯一一个不透明度选项。宿主那边整窗 alpha 取的就是
+// candidate_window_background_opacity（见 CandidateWindowBaseAlpha），所以这一个选项
+// 直接绑那个键——不新增配置项，C++ 侧一行都不用动。两个步进器共用同一份状态，
+// 切后端时值不会在两个控件之间走样。
+const CAND_OPACITY_IDS: NumberStepperIds = {
+  dec: 'candOpacityDecBtn',
+  input: 'candOpacityInput',
+  inc: 'candOpacityIncBtn'
+};
+let previewBackgroundOpacity = OPACITY_DEFAULT;
+let previewForegroundOpacity = OPACITY_DEFAULT;
+let previewUiBackend = 'd2d';
 let previewPreeditStyle = 'pinyin';
 let previewCandTheme: ResolvedTheme = 'dark';
 let previewInputSchema = 'shuangpin';
@@ -459,6 +489,23 @@ function populateFontMenus(systemFonts: string[] | undefined): void {
   FONT_MENUS.forEach((menu) => applyDropdownValue(menu.btnId, menu.menuId, menu.getSelected()));
 }
 
+// WebView2 渲染下整个候选窗只有一个不透明度：宿主是分层窗口，整窗一个 alpha，前景
+// 不透明度对它无效——前景/背景的拆分只存在于 D2D 的绘制颜色里（见
+// CandidateWindowBaseAlpha）。所以按 ui_backend 在两块之间切换，别把点了没反应的
+// 选项摆出来。backend 省略时沿用上次的值（配置快照没带这个键时不至于回退）。
+export function applyCandidateOpacityRows(backend?: string): void {
+  if (backend) {
+    previewUiBackend = backend;
+  }
+  const webview2 = isWebView2UiBackend(previewUiBackend);
+  const splitRows = document.getElementById('candOpacitySplitRows');
+  if (splitRows) splitRows.hidden = webview2;
+  const singleRow = document.getElementById('candOpacitySingleRow');
+  if (singleRow) singleRow.hidden = !webview2;
+  // 藏在 D2D 那块下面的单选项也要跟着刷新：切到 WebView2 时它得立刻是对的值与禁用态。
+  renderNumberStepper(CAND_OPACITY_IDS, previewBackgroundOpacity, OPACITY_MIN, OPACITY_MAX);
+}
+
 export function applyAppearanceConfig(
   candidateWindowPreeditStyle: string | undefined,
   tsfPreeditStyle: string | undefined,
@@ -509,6 +556,14 @@ export function applyAppearanceConfig(
     previewPageSize = candidateAppearance.page_size;
     applyDropdownValue('candPageSizeBtn', 'candPageSizeMenu', String(candidateAppearance.page_size));
   }
+  if (typeof candidateAppearance?.candidate_window_background_opacity === 'number') {
+    previewBackgroundOpacity = clampNumberStepperValue(candidateAppearance.candidate_window_background_opacity, OPACITY_MIN, OPACITY_MAX, OPACITY_DEFAULT);
+    renderNumberStepper(CAND_BACKGROUND_OPACITY_IDS, previewBackgroundOpacity, OPACITY_MIN, OPACITY_MAX);
+  }
+  if (typeof candidateAppearance?.candidate_window_foreground_opacity === 'number') {
+    previewForegroundOpacity = clampNumberStepperValue(candidateAppearance.candidate_window_foreground_opacity, OPACITY_MIN, OPACITY_MAX, OPACITY_DEFAULT);
+    renderNumberStepper(CAND_FOREGROUND_OPACITY_IDS, previewForegroundOpacity, OPACITY_MIN, OPACITY_MAX);
+  }
   if (typeof candidateAppearance?.candidate_window_fit_content === 'boolean') {
     applyToggleState('candidateFitContentToggleBtn', candidateAppearance.candidate_window_fit_content);
   }
@@ -527,6 +582,7 @@ export function applyAppearanceConfig(
     applyToggleState('tsfPreeditShuangpinQuanpinToggleBtn', candidateAppearance.tsf_preedit_shuangpin_quanpin);
   }
   applyDropdownValue('uiBackendBtn', 'uiBackendMenu', candidateAppearance?.ui_backend);
+  applyCandidateOpacityRows(candidateAppearance?.ui_backend);
   applyDropdownValue('settingsLingerBtn', 'settingsLingerMenu', candidateAppearance?.settings_window_linger);
   populateFontMenus(candidateAppearance?.system_fonts);
   renderFallbackFonts();
@@ -649,6 +705,40 @@ export async function setupAppearance() {
     previewPageSize = Number(value) || 6;
     applyCandidatePreviewStyle();
     return previewPageSize;
+  });
+  // 候选窗口背景/前景不透明度：−/+ 步进器，1–100 的整数。预览窗口不做透明演示
+  // （桌面背景不在画布里），值原样交给宿主；前景只在 D2D 渲染下生效。
+  setupNumberStepper(CAND_BACKGROUND_OPACITY_IDS, {
+    min: OPACITY_MIN,
+    max: OPACITY_MAX,
+    fallback: OPACITY_DEFAULT,
+    getValue: () => previewBackgroundOpacity,
+    onCommit: (value) => {
+      previewBackgroundOpacity = value;
+      postConfigUpdate('appearance.candidate_window_background_opacity', value);
+    }
+  });
+  setupNumberStepper(CAND_FOREGROUND_OPACITY_IDS, {
+    min: OPACITY_MIN,
+    max: OPACITY_MAX,
+    fallback: OPACITY_DEFAULT,
+    getValue: () => previewForegroundOpacity,
+    onCommit: (value) => {
+      previewForegroundOpacity = value;
+      postConfigUpdate('appearance.candidate_window_foreground_opacity', value);
+    }
+  });
+  // WebView2 渲染下的那一个：与「背景不透明度」是同一个配置键、同一份状态，只是换了
+  // 个名字——那边整窗就一个 alpha，叫"背景"没有意义。
+  setupNumberStepper(CAND_OPACITY_IDS, {
+    min: OPACITY_MIN,
+    max: OPACITY_MAX,
+    fallback: OPACITY_DEFAULT,
+    getValue: () => previewBackgroundOpacity,
+    onCommit: (value) => {
+      previewBackgroundOpacity = value;
+      postConfigUpdate('appearance.candidate_window_background_opacity', value);
+    }
   });
 
   const colorInput = document.getElementById('candTextColorInput') as HTMLInputElement | null;

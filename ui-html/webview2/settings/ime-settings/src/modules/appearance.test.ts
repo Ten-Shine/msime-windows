@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyAppearanceConfig, onCandidateSurfaceThemeChanged, setupAppearance } from './appearance';
+import partial from '../partials/appearance.html?raw';
 
 const transforms = vi.hoisted(() => new Map<string, (value: string) => string>());
 vi.mock('./shared', () => ({
   applyDropdownValue: vi.fn(), applyToggleState: vi.fn(), populateDropdownMenu: vi.fn(),
   registerDropdownPreparer: vi.fn(), setupToggleButton: vi.fn(),
+  isWebView2UiBackend: (backend: string | undefined) =>
+    backend === 'webview2' || backend === 'webview' || backend === 'web',
   setupDropdownMenu: (_button: string, menu: string, _action: string, _stop: boolean,
                       _path: string, transform: (value: string) => string) => transforms.set(menu, transform)
 }));
@@ -37,6 +40,17 @@ let list: Element;
 let preview: Element;
 let caretPreview: Element;
 let root: Element;
+let backgroundOpacityInput: Element;
+let backgroundOpacityDec: Element;
+let backgroundOpacityInc: Element;
+let foregroundOpacityInput: Element;
+let foregroundOpacityDec: Element;
+let foregroundOpacityInc: Element;
+let opacitySplitRows: Element;
+let opacitySingleRow: Element;
+let opacityInput: Element;
+let opacityDec: Element;
+let opacityInc: Element;
 let postMessage: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   list = new Element();
@@ -44,13 +58,48 @@ beforeEach(() => {
   root = new Element();
   caretPreview = new Element();
   caretPreview.id = 'caretStatePreviewHost';
+  backgroundOpacityInput = new Element();
+  backgroundOpacityInput.id = 'candBackgroundOpacityInput';
+  backgroundOpacityDec = new Element();
+  backgroundOpacityDec.id = 'candBackgroundOpacityDecBtn';
+  backgroundOpacityInc = new Element();
+  backgroundOpacityInc.id = 'candBackgroundOpacityIncBtn';
+  foregroundOpacityInput = new Element();
+  foregroundOpacityInput.id = 'candForegroundOpacityInput';
+  foregroundOpacityDec = new Element();
+  foregroundOpacityDec.id = 'candForegroundOpacityDecBtn';
+  foregroundOpacityInc = new Element();
+  foregroundOpacityInc.id = 'candForegroundOpacityIncBtn';
+  opacitySplitRows = new Element();
+  opacitySplitRows.id = 'candOpacitySplitRows';
+  opacitySingleRow = new Element();
+  opacitySingleRow.id = 'candOpacitySingleRow';
+  opacitySingleRow.hidden = true;
+  opacityInput = new Element();
+  opacityInput.id = 'candOpacityInput';
+  opacityDec = new Element();
+  opacityDec.id = 'candOpacityDecBtn';
+  opacityInc = new Element();
+  opacityInc.id = 'candOpacityIncBtn';
   postMessage = vi.fn();
   vi.stubGlobal('window', { chrome: { webview: { postMessage } } });
   vi.stubGlobal('document', {
     getElementById: (id: string) => {
       const find = (element: Element): Element | undefined => element.id === id ? element : element.children.map(find).find(Boolean);
       return id === 'candFallbackFontList' ? list : id.startsWith('candidate-wnd-') ? preview
-        : id === 'caretStatePreviewHost' ? caretPreview : find(list);
+        : id === 'caretStatePreviewHost' ? caretPreview
+        : id === 'candBackgroundOpacityInput' ? backgroundOpacityInput
+        : id === 'candBackgroundOpacityDecBtn' ? backgroundOpacityDec
+        : id === 'candBackgroundOpacityIncBtn' ? backgroundOpacityInc
+        : id === 'candForegroundOpacityInput' ? foregroundOpacityInput
+        : id === 'candForegroundOpacityDecBtn' ? foregroundOpacityDec
+        : id === 'candForegroundOpacityIncBtn' ? foregroundOpacityInc
+        : id === 'candOpacitySplitRows' ? opacitySplitRows
+        : id === 'candOpacitySingleRow' ? opacitySingleRow
+        : id === 'candOpacityInput' ? opacityInput
+        : id === 'candOpacityDecBtn' ? opacityDec
+        : id === 'candOpacityIncBtn' ? opacityInc
+        : find(list);
     },
     documentElement: root,
     addEventListener: vi.fn(),
@@ -111,6 +160,93 @@ it('adds one empty selector with the plus button and only saves after choosing a
   const saved = choose(1, 'DengXian');
   expect(labels()).toEqual(['SimSun', 'DengXian']);
   expect(saved).toBe('["SimSun","DengXian"]');
+});
+
+it('steps the candidate window background and foreground opacity within 1–100 and persists each change', async () => {
+  await setupAppearance();
+  // 快照回填：两个值各落进自己的输入框，± 的禁用态按区间刷新。
+  applyAppearanceConfig(undefined, undefined, undefined, {
+    candidate_window_background_opacity: 42,
+    candidate_window_foreground_opacity: 80
+  });
+  expect(backgroundOpacityInput.value).toBe('42');
+  expect(foregroundOpacityInput.value).toBe('80');
+  expect(backgroundOpacityDec.disabled).toBe(false);
+  expect(backgroundOpacityInc.disabled).toBe(false);
+
+  backgroundOpacityInc.dispatchEvent(new Event('click'));
+  expect(backgroundOpacityInput.value).toBe('43');
+  expect(postMessage).toHaveBeenCalledTimes(1);
+  expect(postMessage.mock.calls[0][0]).toContain('appearance.candidate_window_background_opacity');
+  expect(postMessage.mock.calls[0][0]).toContain('43');
+
+  // 前景走自己的配置键。
+  postMessage.mockClear();
+  foregroundOpacityInc.dispatchEvent(new Event('click'));
+  expect(postMessage.mock.calls[0][0]).toContain('appearance.candidate_window_foreground_opacity');
+  expect(postMessage.mock.calls[0][0]).toContain('81');
+
+  // 背景到上限再按 +：值不变，不上报。
+  postMessage.mockClear();
+  applyAppearanceConfig(undefined, undefined, undefined, { candidate_window_background_opacity: 100 });
+  expect(backgroundOpacityInc.disabled).toBe(true);
+  backgroundOpacityInc.dispatchEvent(new Event('click'));
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(backgroundOpacityInput.value).toBe('100');
+
+  backgroundOpacityDec.dispatchEvent(new Event('click'));
+  expect(postMessage.mock.calls[0][0]).toContain('99');
+});
+
+it('keeps the candidate opacity rows addressable and the WebView2 one hidden by default', () => {
+  const split = partial.match(/id="candOpacitySplitRows"([\s\S]*?)id="candOpacitySingleRow"/)?.[1] ?? '';
+  // 拆开的那块装着背景与前景两个选择器，收起来的那块只有一个，且初始收起
+  // （出厂默认后端是 D2D）。
+  expect(split).toContain('id="candBackgroundOpacityDecBtn"');
+  expect(split).toContain('id="candForegroundOpacityDecBtn"');
+  expect(partial).toMatch(/id="candOpacitySingleRow"\s+hidden/);
+  for (const id of ['candOpacityDecBtn', 'candOpacityInput', 'candOpacityIncBtn']) {
+    expect(partial).toContain(`id="${id}"`);
+  }
+});
+
+it('shows one opacity option under WebView2 and the foreground/background pair under D2D', async () => {
+  await setupAppearance();
+  // D2D：前景/背景各一个，单选项那块收起来。
+  applyAppearanceConfig(undefined, undefined, undefined, {
+    ui_backend: 'd2d', candidate_window_background_opacity: 42
+  });
+  expect(opacitySplitRows.hidden).toBe(false);
+  expect(opacitySingleRow.hidden).toBe(true);
+  expect(opacityInput.value).toBe('42');
+
+  // WebView2：宿主只有整窗一个 alpha，前景那个对它无效，整块收成一个选项。
+  applyAppearanceConfig(undefined, undefined, undefined, {
+    ui_backend: 'webview2', candidate_window_background_opacity: 42
+  });
+  expect(opacitySplitRows.hidden).toBe(true);
+  expect(opacitySingleRow.hidden).toBe(false);
+  expect(opacityInput.value).toBe('42');
+  expect(opacityDec.disabled).toBe(false);
+  expect(opacityInc.disabled).toBe(false);
+
+  // 那一个选项绑的就是「背景不透明度」这个键：WebView2 的整窗 alpha 取的就是它。
+  postMessage.mockClear();
+  opacityInc.dispatchEvent(new Event('click'));
+  expect(postMessage.mock.calls[0][0]).toContain('appearance.candidate_window_background_opacity');
+  expect(postMessage.mock.calls[0][0]).toContain('43');
+
+  // 快照没带 ui_backend 时沿用上次的值，不回退。
+  applyAppearanceConfig(undefined, undefined, undefined, { candidate_window_background_opacity: 50 });
+  expect(opacitySplitRows.hidden).toBe(true);
+  expect(opacitySingleRow.hidden).toBe(false);
+
+  // 别名 web/webview 也是 WebView2，其余（含旧配置）落 D2D。
+  applyAppearanceConfig(undefined, undefined, undefined, { ui_backend: 'web' });
+  expect(opacitySplitRows.hidden).toBe(true);
+  applyAppearanceConfig(undefined, undefined, undefined, { ui_backend: 'd2d' });
+  expect(opacitySplitRows.hidden).toBe(false);
+  expect(opacitySingleRow.hidden).toBe(true);
 });
 
 it('keeps the caret preview on the resolved candidate theme and text color', () => {

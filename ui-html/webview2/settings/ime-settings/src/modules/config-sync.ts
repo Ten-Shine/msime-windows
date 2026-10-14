@@ -55,6 +55,8 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
           candidate_window_preedit_font_size: data?.appearance?.candidate_window_preedit_font_size,
           cand_text_color: data?.appearance?.cand_text_color,
           page_size: data?.appearance?.page_size,
+          candidate_window_background_opacity: data?.appearance?.candidate_window_background_opacity,
+          candidate_window_foreground_opacity: data?.appearance?.candidate_window_foreground_opacity,
           candidate_window_fit_content: data?.appearance?.candidate_window_fit_content,
           candidate_window_follow_cursor: data?.appearance?.candidate_window_follow_cursor,
           candidate_fixed_badge: data?.appearance?.candidate_fixed_badge,
@@ -501,7 +503,16 @@ function applyConfigData(data: Record<string, any>, target?: string): void {
       module.applyCaretStateIndicatorPosition(data?.general?.caret_state_indicator_position);
       module.applyFloatingToolbarAppearanceConfig(
         data?.general?.floating_toolbar_scale,
-        data?.general?.floating_toolbar_font_size
+        data?.general?.floating_toolbar_font_size,
+        data?.general?.floating_toolbar_background_opacity,
+        data?.general?.floating_toolbar_foreground_opacity,
+        // 渲染后端决定不透明度是拆成前景/背景还是只剩一个，与候选窗同一个开关。
+        data?.appearance?.ui_backend
+      );
+      module.applyFloatingToolbarAutoDimConfig(
+        data?.general?.floating_toolbar_auto_dim,
+        data?.general?.floating_toolbar_auto_dim_opacity,
+        data?.general?.floating_toolbar_auto_dim_delay
       );
       module.applyFloatingToolbarAutoHideConfig(
         data?.general?.floating_toolbar_auto_hide,

@@ -32,14 +32,24 @@ constexpr UINT kCandidateMoveSettleMs = 50;
 // milliseconds later.
 constexpr UINT_PTR TIMER_ID_CANDIDATE_HIDE_GRACE = 12;
 constexpr UINT kCandidateHideGraceMs = 50;
-// Floating toolbar auto-hide. ID 1 on the toolbar HWND belongs to msimeui's
-// caret-blink timer. The countdown polls so hover can be sampled without any
-// page-side mouse messages; the fade steps the layered alpha down.
+// 候选窗渐变。隐藏淡出从淡：隐藏往往跟着一次提交或焦点丢失，淡久了像卡住；
+// 不透明度调节长一点，让用户看清过渡。步进间隔与工具栏淡出一致。
+constexpr UINT_PTR TIMER_ID_CANDIDATE_HIDE_FADE = 15;
+constexpr UINT kCandidateHideFadeMs = 150;
+constexpr UINT kWindowOpacityFadeMs = 200;
+// Floating toolbar auto-hide / auto-dim. ID 1 on the toolbar HWND belongs to
+// msimeui's caret-blink timer. One poll timer drives both countdowns (hide
+// first samples hover, then the dim and hide deadlines are checked); one fade
+// timer steps the layered alpha, and which fade it is decides what "finished"
+// means — dim parks at the reduced opacity, hide takes the host off screen.
 constexpr UINT_PTR TIMER_ID_FTB_AUTO_HIDE = 13;
 constexpr UINT_PTR TIMER_ID_FTB_AUTO_HIDE_FADE = 14;
 constexpr UINT kFloatingToolbarAutoHidePollMs = 200;
 constexpr UINT kFloatingToolbarAutoHideFadeStepMs = 16;
 constexpr UINT kFloatingToolbarAutoHideFadeMs = 400;
+// 普通隐藏（停用、全屏钩子）也淡出，但比自动隐藏的 400ms 短：它常常跟着
+// 焦点切换，淡久了窗口会"黏"在刚切换走的应用上。
+constexpr UINT kFloatingToolbarHideFadeMs = 200;
 // A show repeating the previous frame's preedit, page and caret within this
 // window is a duplicate post rather than new state — the candidate rebuild and
 // the English/cloud merge each request a show per keystroke. Rendering both
@@ -76,6 +86,10 @@ extern double g_clip_envelope_bottom_dip;
 extern double g_clip_envelope_left_dip;
 extern double g_clip_envelope_right_dip;
 extern int g_candidate_dpi_change_suppress_count;
+// Last frame actually painted, used to drop duplicate shows. Cleared on hide so
+// the next session always paints.
+extern std::wstring g_last_rendered_candidate_signature;
+extern ULONGLONG g_last_rendered_candidate_tick;
 
 struct SuppressCandidateDpiChange
 {
@@ -97,6 +111,29 @@ void SyncHostWebViewBounds(ICoreWebView2Controller *controller, HWND hwnd);
 void SetHostWindowCloaked(HWND hwnd, bool cloaked);
 bool IsHostWindowCloaked(HWND hwnd);
 std::wstring DescribeFloatingToolbarHostState();
+
+// 候选窗不透明度渐变与隐藏淡出。同一时间只有一段渐变；种类决定"淡完"
+// 意味着什么——不透明度渐变落在新基准值上，隐藏淡出紧接着走收尾。
+enum class CandidateFadeKind
+{
+    None,
+    Opacity,
+    Hide,
+};
+extern CandidateFadeKind g_candidate_fade_kind;
+extern ULONGLONG g_candidate_fade_start;
+extern BYTE g_candidate_fade_from;
+extern BYTE g_candidate_fade_target;
+// 最后一次写入候选宿主的 alpha。渐变从这里起步；隐藏淡出结束后由
+// ApplyCandidateHideNow 放回基准值，下一次 show 才不会从 0 开始。
+extern BYTE g_candidate_current_alpha;
+void BeginCandidateFade(BYTE target, CandidateFadeKind kind);
+// 取消渐变并把 alpha 拉回基准值（交互语义：show、新的 hide、配置变化）。
+void CancelCandidateFade();
+void StepCandidateFade(HWND hwnd);
+// 候选窗隐藏的收尾：状态复位 + cloak/驻留。隐藏淡出结束、全屏独占和
+// "本来就没上屏"的路径都直接走它，不再经过消息处理。
+void ApplyCandidateHideNow(HWND hwnd);
 
 // ime_windows_candidate_layout.cpp
 POINT GetCandidateLayoutCaret();

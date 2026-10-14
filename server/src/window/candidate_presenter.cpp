@@ -16,6 +16,7 @@
 #include "window/candidate_skin_palette.h"
 #include "window/candidate_wheel_paging.h"
 #include "window/ime_windows.h"
+#include "window/window_opacity_policy.h"
 
 #include "msimeui/Controls.h"
 #include "msimeui/DeviceResources.h"
@@ -362,6 +363,9 @@ struct CandidatePresenter::Impl
     bool contextSubmenuOpen = false;
     bool hostExpandedForMenu = false;
     size_t contextMenuPageIndex = 0;
+    // 隐藏淡出用的整帧图层。跟着 render target 走：target 重建后要重新创建，
+    // Hide() 收尾时释放。
+    Microsoft::WRL::ComPtr<ID2D1Layer> fadeLayer_;
 };
 
 CandidatePresenter::CandidatePresenter() = default;
@@ -376,6 +380,28 @@ bool CandidatePresenter::IsBound() const
 {
     return bound_;
 }
+
+void CandidatePresenter::SetFrameOpacity(float opacity)
+{
+    const float clamped = (std::max)(0.0f, (std::min)(1.0f, opacity));
+    if (frameOpacity_ == clamped)
+    {
+        return;
+    }
+    frameOpacity_ = clamped;
+    Present();
+}
+
+// 前景/背景不透明度在 D2D 端落在绘制颜色上：背景 = 卡片填充、描边、选中与悬停
+// 底色、预编辑底色、阴影；前景 = 候选文字、序号、译文这些画在卡片之上的内容。
+// WebView2 端没有这个能力，那里只有窗口级的整窗 alpha。
+namespace
+{
+void ScaleAlpha(D2D1_COLOR_F &color, float factor)
+{
+    color.a *= factor;
+}
+} // namespace
 
 bool CandidatePresenter::Bind(HWND hwnd)
 {
@@ -492,6 +518,9 @@ void CandidatePresenter::ApplySkin()
                 << GetConfiguredCandidateFont() << '|' << GetConfiguredCandidateFontSize() << '|'
                 << GetConfiguredCandidateWindowPreeditFontSize() << '|' << GetConfiguredCandidateWindowLayout() << '|'
                 << GetConfiguredCandidateTextColor() << '|' << GetConfiguredCandidateWindowPreeditStyle();
+    // 前景/背景不透明度参与指纹：它们落在绘制颜色上，只有重新解析 token 才能生效。
+    fingerprint << '|' << GetConfiguredCandidateWindowBackgroundOpacity() << '|'
+                << GetConfiguredCandidateWindowForegroundOpacity();
     fingerprint << '|' << GetConfiguredCandidateEnglishFont() << '|' << GetConfiguredCandidateWindowFitContent();
     // 同一个外部皮肤的 skin.toml 或图片改了，只有强制重载能看出来；带上重载代数让 D2D 也重读 manifest。
     fingerprint << '|' << GetCandidateSkinReloadRevision();
@@ -792,11 +821,50 @@ void CandidatePresenter::ApplySkin()
     }
     const CandidateSkinCatalog::CandidateColors *packageColors =
         package ? &(candLight ? package->light : package->dark) : nullptr;
-    const CandidateSkinPalette palette =
+    // 非 const：前景/背景不透明度要压到解析出来的颜色上，下面统一乘。
+    CandidateSkinPalette palette =
         ResolveCandidateSkinPalette(baseSkin, candLight, GetConfiguredCandidateTextColor(), packageColors);
+    const float backgroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredCandidateWindowBackgroundOpacity());
+    const float foregroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredCandidateWindowForegroundOpacity());
+    // 卡片与文字都从 palette 取，先压它，tokens 随后按前景/背景各自归类。
+    ScaleAlpha(palette.surface, backgroundOpacity);
+    ScaleAlpha(palette.border, backgroundOpacity);
+    ScaleAlpha(palette.text, foregroundOpacity);
+    ScaleAlpha(palette.candidateText, foregroundOpacity);
+    ScaleAlpha(palette.preeditText, foregroundOpacity);
     tokens.surface = palette.surface;
     tokens.border = palette.border;
     tokens.text = palette.text;
+    // 背景：卡片填充与描边之上、作为"底"的部分——高亮与悬停底色、预编辑底色与
+    // 分隔线、右键菜单的底与边框。
+    ScaleAlpha(tokens.selected, backgroundOpacity);
+    ScaleAlpha(tokens.hover, backgroundOpacity);
+    ScaleAlpha(tokens.preeditBackground, backgroundOpacity);
+    ScaleAlpha(tokens.preeditDivider, backgroundOpacity);
+    ScaleAlpha(tokens.menuFill, backgroundOpacity);
+    ScaleAlpha(tokens.menuBorder, backgroundOpacity);
+    ScaleAlpha(tokens.menuHover, backgroundOpacity);
+    ScaleAlpha(tokens.pagerDivider, backgroundOpacity);
+    // 前景：画在卡片之上的内容——候选文字、序号、译文与其词性/分隔符、选中行
+    // 文字、选中条、预编辑光标、菜单文字。
+    ScaleAlpha(tokens.number, foregroundOpacity);
+    ScaleAlpha(tokens.translation, foregroundOpacity);
+    ScaleAlpha(tokens.translationPos, foregroundOpacity);
+    ScaleAlpha(tokens.translationSeparator, foregroundOpacity);
+    ScaleAlpha(tokens.rowTextSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowLabelSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationPosSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationSeparatorSelected, foregroundOpacity);
+    ScaleAlpha(tokens.menuText, foregroundOpacity);
+    ScaleAlpha(tokens.selectedBar, foregroundOpacity);
+    ScaleAlpha(tokens.preeditCaret, foregroundOpacity);
+    ScaleAlpha(tokens.accent, foregroundOpacity);
+    // 装饰图与阴影都跟着背景一起淡。
+    if (impl_->decoration)
+    {
+        impl_->decoration->SetOpacity(backgroundOpacity);
+    }
     // 阴影跟皮肤走，与 WebView2 端同一参照：四套内置皮肤与自定义包共用的皮肤 CSS
     // （ui-html/webview2/candwnd/skins/*/horizontal_*.css）带同一对 box-shadow——
     // light `8px 10px 24px rgba(0,0,0,.18), 2px 3px 8px rgba(0,0,0,.10)`，dark α .34/.22；
@@ -808,7 +876,9 @@ void CandidatePresenter::ApplySkin()
         {
             // 外部皮肤的 shadow = soft / strong 按同一系数缩放两层不透明度，与 WebView2 端一致。
             const float scale = ShadowAlphaScale(shadow);
-            const auto alpha = [scale](float value) { return (std::min)(value * scale, 1.0f); };
+            const auto alpha = [scale, backgroundOpacity](float value) {
+                return (std::min)(value * scale * backgroundOpacity, 1.0f);
+            };
             const std::vector<msimeui::ShadowPass> shadowPasses = {
                 {12.0f, alpha(candLight ? 0.18f : 0.34f), 8.0f, 10.0f},
                 {4.0f, alpha(candLight ? 0.10f : 0.22f), 2.0f, 3.0f},
@@ -1730,6 +1800,10 @@ void CandidatePresenter::Hide()
     // behind to show.
     PresentEmptyFrame();
     SetCandidateHostCloaked(true);
+    // 淡出到此为止：宿主已 cloak，整帧不透明度归位，下一次 show 不会接着上次的
+    // 淡出值画。图层跟着 target 走，一并释放。
+    frameOpacity_ = 1.0f;
+    impl_->fadeLayer_.Reset();
     lastHostWidthPx_ = 0;
     lastHostHeightPx_ = 0;
     stickyCardKey_.clear();
@@ -1761,6 +1835,24 @@ void CandidatePresenter::Present()
     }
     target->BeginDraw();
     target->Clear(D2D1::ColorF(0, 0.0f));
+    // 隐藏淡出：D2D 宿主没有重定向位图，拿不到窗口级 alpha，整帧不透明度用一层
+    // D2D 图层实现（frameOpacity_ 为 1 时完全不压层，走原来的绘制路径）。
+    ID2D1DeviceContext *context = impl_->resources.GetDeviceContext();
+    bool layerPushed = false;
+    if (frameOpacity_ < 1.0f && context != nullptr && impl_->window->GetScene())
+    {
+        if (!impl_->fadeLayer_ && FAILED(context->CreateLayer(impl_->fadeLayer_.GetAddressOf())))
+        {
+            impl_->fadeLayer_.Reset();
+        }
+        if (impl_->fadeLayer_)
+        {
+            D2D1_LAYER_PARAMETERS params = D2D1::LayerParameters();
+            params.opacity = frameOpacity_;
+            target->PushLayer(params, impl_->fadeLayer_.Get());
+            layerPushed = true;
+        }
+    }
     if (msimeui::Scene *scene = impl_->window->GetScene())
     {
         const float dpi = impl_->window->GetDpi();
@@ -1777,9 +1869,15 @@ void CandidatePresenter::Present()
         scene->EnsureLayout({layoutW, layoutH});
         scene->Render(impl_->resources);
     }
+    if (layerPushed)
+    {
+        target->PopLayer();
+    }
     const HRESULT hr = target->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET)
     {
+        // 图层是跟着 render target 的资源，target 重建后必须重新创建。
+        impl_->fadeLayer_.Reset();
         impl_->resources.DiscardTarget();
         return;
     }

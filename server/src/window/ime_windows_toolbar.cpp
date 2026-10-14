@@ -16,6 +16,7 @@
 #include "utils/webview_utils.h"
 #include "utils/window_utils.h"
 #include "window/floating_toolbar_visibility_policy.h"
+#include "window/window_opacity_policy.h"
 #include "log/ftb_diag_log.h"
 #include <windowsx.h>
 
@@ -242,30 +243,78 @@ void PlaceFloatingToolbarOnScreen(HWND hwnd)
     LayoutFloatingToolbar(hwnd, true);
 }
 
-// Auto-hide state. All of it lives on the UI thread, like the applies.
-// g_ftb_auto_hidden survives focus changes, IME activation and config syncs on
-// purpose: only a toolbar-visible input state change or a settings change
-// brings the toolbar back, otherwise every focus switch would re-show it.
+// Auto-hide / auto-dim / opacity state. All of it lives on the UI thread, like
+// the applies. g_ftb_auto_hidden survives focus changes, IME activation and
+// config syncs on purpose: only a toolbar-visible input state change or a
+// settings change brings the toolbar back, otherwise every focus switch would
+// re-show it.
 bool g_ftb_auto_hidden = false;
 bool g_ftb_auto_hide_armed = false;
-bool g_ftb_auto_hide_fading = false;
+// At most one fade runs at a time. The kind decides what "finished" means:
+// Opacity lands on the new base value, Dim parks at the reduced opacity, Hide
+// and AutoHide both take the host off screen — only AutoHide counts as
+// auto-hidden, so coming back from it takes a state change, not merely the
+// next visibility decision.
+enum class FtbFadeKind
+{
+    None,
+    Opacity,
+    Dim,
+    Hide,
+    AutoHide,
+};
+FtbFadeKind g_ftb_fade_kind = FtbFadeKind::None;
+// Sitting at the dimmed opacity after a finished dim fade. Hover or a state
+// change (RevealAutoHiddenFloatingToolbar / RestartFloatingToolbarAutoHide)
+// brings the base opacity back.
+bool g_ftb_auto_dimmed = false;
 ULONGLONG g_ftb_auto_hide_deadline = 0;
-ULONGLONG g_ftb_auto_hide_fade_start = 0;
+ULONGLONG g_ftb_auto_dim_deadline = 0;
+ULONGLONG g_ftb_fade_start = 0;
+BYTE g_ftb_fade_from = 255;
+BYTE g_ftb_fade_target = 255;
+// Last alpha written to the host. A fade starts from here rather than from
+// 255, so a hide that fires while dimmed fades from the dimmed value down.
+BYTE g_ftb_current_alpha = 255;
 
 ULONGLONG FloatingToolbarAutoHideDelayMs()
 {
     return static_cast<ULONGLONG>(GetConfiguredFloatingToolbarAutoHideDelay()) * 1000ULL;
 }
 
+ULONGLONG FloatingToolbarAutoDimDelayMs()
+{
+    return static_cast<ULONGLONG>(GetConfiguredFloatingToolbarAutoDimDelay()) * 1000ULL;
+}
+
+// 100% maps to 255, so an unset config keeps the fully opaque host.
+// D2D 端前景/背景不透明度落在绘制颜色里（FloatingToolbarPresenter::ApplyTheme），
+// 窗口级 alpha 只服务自动降低与隐藏淡出，基准是"不压"：这里若返回背景不透明度，
+// 整个宿主——图标与文字也在里面——都会乘上它，把背景调到 1% 就等于把前景也调到 1%。
+// WebView2 端没有前景/背景之分，整窗 alpha 取背景不透明度（前景在 WebView2 下无效）。
+BYTE FloatingToolbarBaseAlpha()
+{
+    return FanyImeUi::WindowOpacityBaseAlpha(UseD2dSmallWindowUi(), GetConfiguredFloatingToolbarBackgroundOpacity());
+}
+
+BYTE FloatingToolbarDimAlpha()
+{
+    return FanyImeUi::WindowOpacityAlpha(GetConfiguredFloatingToolbarAutoDimOpacity());
+}
+
 void SetFloatingToolbarAlpha(BYTE alpha)
 {
     // Both backends share the layered host from PrepareLayeredHostWindow. A
     // lost alpha is what the host-state trace calls an invisible toolbar, so
-    // every path that ends a fade puts 255 back.
+    // every path that ends a fade puts the base alpha back.
+    // 写的是整窗 alpha，前景也在里面：只有渐变（自动降低、隐藏）和"放回基准"
+    // 两种语义，不要把前景/背景不透明度直接传进来。
+    g_ftb_current_alpha = alpha;
     SetLayeredWindowAttributes(::global_hwnd_ftb, 0, alpha, LWA_ALPHA);
 }
 
-// Set when a finished fade hid the host at alpha 0; the next show owes it 255.
+// Set when a finished fade hid the host at alpha 0; the next show owes it the
+// base alpha.
 bool g_ftb_alpha_cleared = false;
 
 void RestoreFloatingToolbarAlpha()
@@ -273,7 +322,7 @@ void RestoreFloatingToolbarAlpha()
     if (g_ftb_alpha_cleared)
     {
         g_ftb_alpha_cleared = false;
-        SetFloatingToolbarAlpha(255);
+        SetFloatingToolbarAlpha(FloatingToolbarBaseAlpha());
     }
 }
 
@@ -287,15 +336,58 @@ bool IsCursorOverFloatingToolbar()
     return GetCursorPos(&cursor) && GetWindowRect(::global_hwnd_ftb, &rect) && PtInRect(&rect, cursor);
 }
 
-void CancelFloatingToolbarAutoHideFade()
+// Start (or retarget) a fade from the current alpha. Retargeting the same kind
+// keeps a dragged opacity slider smooth; a fade never interrupts a hide — the
+// hide owns the host until the next show.
+void BeginFloatingToolbarFade(BYTE target, FtbFadeKind kind)
 {
-    if (!g_ftb_auto_hide_fading)
+    if (!::global_hwnd_ftb)
+    {
+        return;
+    }
+    if ((g_ftb_fade_kind == FtbFadeKind::Hide || g_ftb_fade_kind == FtbFadeKind::AutoHide) && kind != g_ftb_fade_kind)
+    {
+        return;
+    }
+    if (kind == FtbFadeKind::Opacity)
+    {
+        // 调节不透明度是一次交互：停在降低值的状态就此结束，从当前值淡到新的
+        // 基准值。
+        g_ftb_auto_dimmed = false;
+    }
+    g_ftb_fade_kind = kind;
+    g_ftb_fade_start = GetTickCount64();
+    g_ftb_fade_from = g_ftb_current_alpha;
+    g_ftb_fade_target = target;
+    SetTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE, kFloatingToolbarAutoHideFadeStepMs, nullptr);
+}
+
+// Any interaction cancels a fade in progress and pulls a dimmed toolbar back
+// to the base opacity. With neither a fade nor a dim in flight this leaves the
+// alpha alone, so the hide-at-0 handoff via g_ftb_alpha_cleared still works.
+void CancelFloatingToolbarFade()
+{
+    if (g_ftb_fade_kind == FtbFadeKind::None && !g_ftb_auto_dimmed)
     {
         return;
     }
     KillTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE);
-    g_ftb_auto_hide_fading = false;
-    SetFloatingToolbarAlpha(255);
+    g_ftb_fade_kind = FtbFadeKind::None;
+    g_ftb_auto_dimmed = false;
+    SetFloatingToolbarAlpha(FloatingToolbarBaseAlpha());
+}
+
+// The synchronous half of HideFloatingToolbarHost: no fade, no cloak decision.
+// Called by the fade's finish path (which already owns the alpha) and by the
+// paths that have nothing to fade.
+void HideFloatingToolbarHostNow()
+{
+    if (!::global_hwnd_ftb)
+    {
+        return;
+    }
+    ShowWindow(::global_hwnd_ftb, SW_HIDE);
+    UpdateSmallWindowWebviewVisibility(::global_hwnd_ftb, false);
 }
 
 void DisarmFloatingToolbarAutoHide()
@@ -306,19 +398,28 @@ void DisarmFloatingToolbarAutoHide()
     }
     KillTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE);
     g_ftb_auto_hide_armed = false;
-    CancelFloatingToolbarAutoHideFade();
+    CancelFloatingToolbarFade();
 }
 
 // Starts a fresh countdown. Callers decide whether an already-running one
 // should be restarted; a mere re-apply (focus change) keeps it running.
 void ArmFloatingToolbarAutoHide()
 {
-    if (!::global_hwnd_ftb || !GetConfiguredFloatingToolbarAutoHide())
+    if (!::global_hwnd_ftb || (!GetConfiguredFloatingToolbarAutoHide() && !GetConfiguredFloatingToolbarAutoDim()))
     {
         return;
     }
-    CancelFloatingToolbarAutoHideFade();
-    g_ftb_auto_hide_deadline = GetTickCount64() + FloatingToolbarAutoHideDelayMs();
+    // A fresh countdown is itself an interaction: a dimmed toolbar comes back
+    // to the base opacity and the countdown restarts from there. An opacity
+    // fade is left to finish on its own — cancelling it here would snap the
+    // value the user just dialled in on every focus change.
+    if (g_ftb_fade_kind != FtbFadeKind::Opacity)
+    {
+        CancelFloatingToolbarFade();
+    }
+    const ULONGLONG now = GetTickCount64();
+    g_ftb_auto_hide_deadline = now + FloatingToolbarAutoHideDelayMs();
+    g_ftb_auto_dim_deadline = now + FloatingToolbarAutoDimDelayMs();
     if (!g_ftb_auto_hide_armed)
     {
         SetTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE, kFloatingToolbarAutoHidePollMs, nullptr);
@@ -328,7 +429,9 @@ void ArmFloatingToolbarAutoHide()
 
 void PollFloatingToolbarAutoHide()
 {
-    if (!GetConfiguredFloatingToolbarAutoHide() || !IsWindowVisible(::global_hwnd_ftb))
+    const bool auto_hide = GetConfiguredFloatingToolbarAutoHide();
+    const bool auto_dim = GetConfiguredFloatingToolbarAutoDim();
+    if ((!auto_hide && !auto_dim) || !IsWindowVisible(::global_hwnd_ftb))
     {
         DisarmFloatingToolbarAutoHide();
         return;
@@ -339,22 +442,36 @@ void PollFloatingToolbarAutoHide()
     if (IsCursorOverFloatingToolbar() || IsFloatingToolbarPaintGraceActive() || !IsFloatingToolbarWebviewReady() ||
         IsHostWindowCloaked(::global_hwnd_ftb))
     {
-        CancelFloatingToolbarAutoHideFade();
+        // 悬停即交互：淡出/降低中的拉回基准；不透明度调节渐变让它自然结束，
+        // 悬停不该把用户刚调到的值跳变过去。
+        if (g_ftb_fade_kind != FtbFadeKind::Opacity)
+        {
+            CancelFloatingToolbarFade();
+        }
         g_ftb_auto_hide_deadline = now + FloatingToolbarAutoHideDelayMs();
+        g_ftb_auto_dim_deadline = now + FloatingToolbarAutoDimDelayMs();
         return;
     }
-    if (!g_ftb_auto_hide_fading && now >= g_ftb_auto_hide_deadline)
+    // Dim goes first: it is the gentler of the two, and a hide that fires
+    // afterwards fades from the dimmed alpha instead of the base one. Both
+    // wait for a quiet fade slot so two fades never share one timer.
+    if (auto_dim && !g_ftb_auto_dimmed && g_ftb_fade_kind == FtbFadeKind::None && now >= g_ftb_auto_dim_deadline)
+    {
+        FTB_DIAG_LOGF(L"ftb auto-dim fade started delay={}s target={}%", GetConfiguredFloatingToolbarAutoDimDelay(),
+                      GetConfiguredFloatingToolbarAutoDimOpacity());
+        BeginFloatingToolbarFade(FloatingToolbarDimAlpha(), FtbFadeKind::Dim);
+        return;
+    }
+    if (auto_hide && g_ftb_fade_kind == FtbFadeKind::None && now >= g_ftb_auto_hide_deadline)
     {
         FTB_DIAG_LOGF(L"ftb auto-hide fade started delay={}s", GetConfiguredFloatingToolbarAutoHideDelay());
-        g_ftb_auto_hide_fading = true;
-        g_ftb_auto_hide_fade_start = now;
-        SetTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE, kFloatingToolbarAutoHideFadeStepMs, nullptr);
+        BeginFloatingToolbarFade(0, FtbFadeKind::AutoHide);
     }
 }
 
-void StepFloatingToolbarAutoHideFade()
+void StepFloatingToolbarFade()
 {
-    if (!g_ftb_auto_hide_fading)
+    if (g_ftb_fade_kind == FtbFadeKind::None)
     {
         KillTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE);
         return;
@@ -362,34 +479,73 @@ void StepFloatingToolbarAutoHideFade()
     if (!IsWindowVisible(::global_hwnd_ftb))
     {
         // Hidden underneath the fade by someone else (fullscreen hook).
-        CancelFloatingToolbarAutoHideFade();
+        CancelFloatingToolbarFade();
         return;
     }
     const ULONGLONG now = GetTickCount64();
     if (IsCursorOverFloatingToolbar())
     {
-        CancelFloatingToolbarAutoHideFade();
+        if (g_ftb_fade_kind != FtbFadeKind::Opacity)
+        {
+            CancelFloatingToolbarFade();
+        }
         g_ftb_auto_hide_deadline = now + FloatingToolbarAutoHideDelayMs();
+        g_ftb_auto_dim_deadline = now + FloatingToolbarAutoDimDelayMs();
         return;
     }
-    const ULONGLONG elapsed = now - g_ftb_auto_hide_fade_start;
-    if (elapsed < kFloatingToolbarAutoHideFadeMs)
+    const ULONGLONG elapsed = now - g_ftb_fade_start;
+    // 普通隐藏淡出短一档：它常常跟着焦点切换，淡久了窗口会"黏"在刚切换走的
+    // 应用上。自动隐藏/自动降低沿用既有的长淡出节奏。
+    const UINT fadeMs =
+        g_ftb_fade_kind == FtbFadeKind::Hide ? kFloatingToolbarHideFadeMs : kFloatingToolbarAutoHideFadeMs;
+    if (elapsed < fadeMs)
     {
-        const ULONGLONG remaining = kFloatingToolbarAutoHideFadeMs - elapsed;
-        SetFloatingToolbarAlpha(static_cast<BYTE>(remaining * 255ULL / kFloatingToolbarAutoHideFadeMs));
+        SetFloatingToolbarAlpha(FanyImeUi::WindowFadeAlpha(g_ftb_fade_from, g_ftb_fade_target, elapsed, fadeMs));
         return;
     }
-    FTB_DIAG_LOGF(L"ftb auto-hide fade finished");
-    g_ftb_auto_hidden = true;
-    // Hide at alpha 0 and leave it there: restoring 255 here (directly, or via
-    // the cancel path in Disarm) paints one opaque frame before or during the
-    // DWM hide transition. The next show restores the alpha instead.
+    if (g_ftb_fade_kind == FtbFadeKind::Dim)
+    {
+        // Dimmed, not hidden: the toolbar stays on screen at the reduced
+        // opacity until hover or a state change brings the base opacity back.
+        FTB_DIAG_LOGF(L"ftb auto-dim fade finished");
+        g_ftb_fade_kind = FtbFadeKind::None;
+        g_ftb_auto_dimmed = true;
+        SetFloatingToolbarAlpha(g_ftb_fade_target);
+        return;
+    }
+    if (g_ftb_fade_kind == FtbFadeKind::Opacity)
+    {
+        // 不透明度渐变：落在新的基准值上即结束。
+        g_ftb_fade_kind = FtbFadeKind::None;
+        SetFloatingToolbarAlpha(g_ftb_fade_target);
+        return;
+    }
+    // Hide / AutoHide finished. The kind only matters for g_ftb_auto_hidden:
+    // an auto-hidden toolbar needs a state change to come back, a plainly
+    // hidden one returns with the next visibility decision.
+    const bool from_auto_hide = g_ftb_fade_kind == FtbFadeKind::AutoHide;
     KillTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE);
-    g_ftb_auto_hide_fading = false;
+    g_ftb_fade_kind = FtbFadeKind::None;
+    // The hide supersedes a dim: clearing it here keeps Disarm's cancel from
+    // painting the base alpha back over the alpha-0 hide below.
+    g_ftb_auto_dimmed = false;
+    // Hide at alpha 0 and leave it there: restoring the base alpha here
+    // (directly, or via the cancel path in Disarm) paints one opaque frame
+    // before or during the DWM hide transition. The next show restores the
+    // alpha instead.
     SetFloatingToolbarAlpha(0);
     g_ftb_alpha_cleared = true;
-    DisarmFloatingToolbarAutoHide();
-    HideFloatingToolbarHost();
+    if (from_auto_hide)
+    {
+        FTB_DIAG_LOGF(L"ftb auto-hide fade finished");
+        g_ftb_auto_hidden = true;
+        DisarmFloatingToolbarAutoHide();
+    }
+    else
+    {
+        FTB_DIAG_LOGF(L"ftb hide fade finished");
+    }
+    HideFloatingToolbarHostNow();
     if (IsWindowVisible(::global_hwnd_ftb) && !IsHostWindowCloaked(::global_hwnd_ftb))
     {
         // The hide was deferred (paint grace), so the host is still on screen.
@@ -397,6 +553,42 @@ void StepFloatingToolbarAutoHideFade()
     }
 }
 } // namespace
+
+// Apply the configured toolbar opacity: at window creation, and from the
+// config sync when an opacity setting changes. A settings change counts as
+// interaction, so an in-flight dim is cancelled rather than fought by the
+// next poll — the toolbar fades from wherever it is to the new base value.
+void ApplyConfiguredFloatingToolbarOpacity()
+{
+    if (!::global_hwnd_ftb)
+    {
+        return;
+    }
+    if (UseD2dSmallWindowUi())
+    {
+        // D2D：前景/背景不透明度落在绘制颜色里，只有 ApplyTheme() 会重新解析皮肤
+        // 颜色再重建场景（ApplyAppearance 只是拿缓存下来的 impl_->fill / impl_->glyph
+        // 重建，改值到不了画面上）。这里必须走 ApplyTheme()，否则两个不透明度选项在
+        // D2D 下点了没反应，只剩窗口级 alpha 那条路把整窗（含图标文字）压暗。
+        // 与缩放、图标尺寸这些走 RebuildScene 的外观项不同，那两个本来就读配置。
+        // 没有渐变：D2D 宿主的窗口级 alpha 只留给隐藏与自动降低不透明度。
+        FloatingToolbarPresenter::Instance().ApplyTheme();
+        return;
+    }
+    // 没上屏（驻留/隐藏/暖机）直接落值：淡了也看不见，还会和下一次 show 的
+    // 恢复打架。
+    if (!IsWindowVisible(::global_hwnd_ftb) || IsHostWindowCloaked(::global_hwnd_ftb))
+    {
+        if (g_ftb_fade_kind != FtbFadeKind::None)
+        {
+            KillTimer(::global_hwnd_ftb, TIMER_ID_FTB_AUTO_HIDE_FADE);
+            g_ftb_fade_kind = FtbFadeKind::None;
+        }
+        SetFloatingToolbarAlpha(FloatingToolbarBaseAlpha());
+        return;
+    }
+    BeginFloatingToolbarFade(FloatingToolbarBaseAlpha(), FtbFadeKind::Opacity);
+}
 
 void RestartFloatingToolbarAutoHide(const wchar_t *reason)
 {
@@ -411,7 +603,7 @@ void RestartFloatingToolbarAutoHide(const wchar_t *reason)
 
 void RevealAutoHiddenFloatingToolbar(const wchar_t *reason)
 {
-    if (!::global_hwnd_ftb || !GetConfiguredFloatingToolbarAutoHide())
+    if (!::global_hwnd_ftb || (!GetConfiguredFloatingToolbarAutoHide() && !GetConfiguredFloatingToolbarAutoDim()))
     {
         return;
     }
@@ -419,6 +611,12 @@ void RevealAutoHiddenFloatingToolbar(const wchar_t *reason)
     {
         g_ftb_auto_hidden = false;
         ApplyConfiguredFloatingToolbarVisibility(reason);
+    }
+    else if (g_ftb_auto_dimmed)
+    {
+        // 自动降低不透明度待机中：状态变化即交互，拉回基准不透明度；
+        // Arm 在下面重新开始两个计时。
+        CancelFloatingToolbarFade();
     }
     if (IsWindowVisible(::global_hwnd_ftb))
     {
@@ -531,6 +729,13 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason)
         {
             RaiseTrayMenuAboveSmallWindows(L"after-show-floating-toolbar");
         }
+        // 淡出途中收到 show（停用中又激活、自动隐藏淡到一半）：拉回基准不透明度，
+        // 否则淡完会把刚要显示的工具栏藏掉，自动隐藏还会顺手置上 auto_hidden。
+        // 不透明度调节渐变除外——让它自然结束更顺。
+        if (g_ftb_fade_kind == FtbFadeKind::Hide || g_ftb_fade_kind == FtbFadeKind::AutoHide)
+        {
+            CancelFloatingToolbarFade();
+        }
         // Still hidden here, so putting the alpha back cannot flash.
         RestoreFloatingToolbarAlpha();
         if (!is_visible)
@@ -564,10 +769,19 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason)
     }
     else
     {
-        DisarmFloatingToolbarAutoHide();
-        if (is_visible)
+        if (g_ftb_fade_kind == FtbFadeKind::Hide || g_ftb_fade_kind == FtbFadeKind::AutoHide)
         {
-            HideFloatingToolbarHost();
+            // 淡出已在途中：它自己会收尾（含 disarm 与 auto_hidden）。在这儿
+            // 取消只会让工具栏弹回基准透明度、再从头淡一次。
+            FTB_DIAG_LOGF(L"hide decision folded into in-flight fade");
+        }
+        else
+        {
+            DisarmFloatingToolbarAutoHide();
+            if (is_visible)
+            {
+                HideFloatingToolbarHost();
+            }
         }
     }
 }
@@ -611,8 +825,18 @@ void HideFloatingToolbarHost()
         SetHostWindowCloaked(::global_hwnd_ftb, true);
         return;
     }
-    ShowWindow(::global_hwnd_ftb, SW_HIDE);
-    UpdateSmallWindowWebviewVisibility(::global_hwnd_ftb, false);
+    // 已经挂在淡出上（重复隐藏被它吸收）、或者本来就没人可淡（已隐藏 / 未上
+    // 屏）都直接收尾，不重开一段淡出。
+    if (g_ftb_fade_kind == FtbFadeKind::Hide || g_ftb_fade_kind == FtbFadeKind::AutoHide ||
+        !IsWindowVisible(::global_hwnd_ftb) || IsHostWindowCloaked(::global_hwnd_ftb))
+    {
+        HideFloatingToolbarHostNow();
+        return;
+    }
+    // 普通隐藏也淡出：停用、切窗口、全屏钩子都走这里，200ms 淡完再由定时器
+    // 收尾。期间悬停或一次 show 都会把淡出取消掉。
+    FTB_DIAG_LOGF(L"ftb hide fade started");
+    BeginFloatingToolbarFade(0, FtbFadeKind::Hide);
 }
 
 void ApplyConfiguredFloatingToolbarSize()
@@ -800,7 +1024,7 @@ LRESULT CALLBACK WndProcFtbWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         }
         if (wParam == TIMER_ID_FTB_AUTO_HIDE_FADE)
         {
-            StepFloatingToolbarAutoHideFade();
+            StepFloatingToolbarFade();
             break;
         }
         if (wParam == TIMER_ID_FTB_DPI_REMEASURE)

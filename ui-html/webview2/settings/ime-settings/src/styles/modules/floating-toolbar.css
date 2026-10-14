@@ -11,11 +11,17 @@
 .section-title.caret-state-option-title { font-size: var(--font-size-body); font-weight: 400; -webkit-text-stroke: var(--sub-item-title-stroke) currentColor; }
 .floating-toolbar-setting-row { padding: 20px 24px; }
 /* Auto-hide rows sit under the main switch; the delay is a child of the auto-hide
-   switch, indented and greyed out while that switch is off. */
-.ftb-auto-hide-row, .ftb-auto-hide-delay-row, .ftb-shadow-row { border-top: 1px solid var(--divider-color); }
-.ftb-auto-hide-delay-row { padding-left: 48px; }
-.ftb-auto-hide-delay-row.is-disabled { opacity: 0.45; }
-.ftb-auto-hide-delay-row.is-disabled .number-stepper { pointer-events: none; }
+   switch, indented and greyed out while that switch is off. The auto-dim rows
+   follow the same shape: the dim opacity and its delay are children of the
+   auto-dim switch. */
+.ftb-auto-hide-row, .ftb-auto-hide-delay-row, .ftb-opacity-row, .ftb-fg-opacity-row, .ftb-auto-dim-row,
+.ftb-auto-dim-opacity-row, .ftb-auto-dim-delay-row, .ftb-shadow-row { border-top: 1px solid var(--divider-color); }
+.ftb-auto-hide-delay-row, .ftb-auto-dim-opacity-row, .ftb-auto-dim-delay-row { padding-left: 48px; }
+.ftb-auto-hide-delay-row.is-disabled, .ftb-auto-dim-opacity-row.is-disabled, .ftb-auto-dim-delay-row.is-disabled {
+  opacity: 0.45;
+}
+.ftb-auto-hide-delay-row.is-disabled .number-stepper, .ftb-auto-dim-opacity-row.is-disabled .number-stepper,
+.ftb-auto-dim-delay-row.is-disabled .number-stepper { pointer-events: none; }
 .floating-toolbar-preview { min-height: 190px; padding: 20px 24px 30px; border-top: 1px solid var(--border-color); background: var(--surface-subtle); }
 .floating-toolbar-preview-label { margin-bottom: 28px; color: var(--text-muted); font-size: 12px; }
 .caret-state-preview { padding: 20px 24px 30px; border-top: 1px solid var(--border-color); background: var(--surface-subtle); }
