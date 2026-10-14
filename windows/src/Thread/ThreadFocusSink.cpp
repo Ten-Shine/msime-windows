@@ -4,6 +4,7 @@
 #include "CandidateListUIPresenter.h"
 #include "CompositionProcessorEngine.h"
 #include "FocusAnnouncementPolicy.h"
+#include "ToolbarVisibilityPolicy.h"
 #include <debugapi.h>
 #include <cwchar>
 #include "fmt/xchar.h"
@@ -50,6 +51,135 @@ bool CMetasequoiaIME::_CaptureWindowsTextInputHostFocusLoss()
     _focusLostToWindowsTextInputHost =
         _focusLostToWindowsTextInputHost || IsWindowsTextInputHostWindow(GetForegroundWindow());
     return _focusLostToWindowsTextInputHost;
+}
+
+bool CMetasequoiaIME::_IsOwnThreadTheActiveInputMethod()
+{
+    // ITfActiveLanguageProfileNotifySink::OnActivated is the framework's
+    // authoritative profile notification: it fires for the manual switch and
+    // for the per-app-window switch alike, so the flag alone says whether
+    // this thread's active input method is this text service.
+    return _ownProfileActiveInThread;
+}
+
+bool CMetasequoiaIME::_ThreadOwnsInputFocus()
+{
+    // ITfThreadMgr::IsThreadFocus is the framework's own record of which thread
+    // owns the input focus, so unlike a foreground window query it cannot lag a
+    // window switch. Claiming the floating toolbar has to require it: a focus
+    // notification queued before the user left is dispatched after
+    // OnKillThreadFocus already ended the claim, and re-claiming there is the
+    // half of the flash that no foreground window check can see.
+    if (!_pThreadMgr)
+    {
+        return false;
+    }
+    BOOL hasThreadFocus = FALSE;
+    return SUCCEEDED(_pThreadMgr->IsThreadFocus(&hasThreadFocus)) && hasThreadFocus != FALSE;
+}
+
+ToolbarVisibilityDecision CMetasequoiaIME::_DecideToolbarVisibilityForForegroundWindow(const wchar_t *source,
+                                                                                       bool logKeepDecision)
+{
+    const HWND foreground = GetForegroundWindow();
+    DWORD foregroundThreadId = 0;
+    HKL foregroundLayout = nullptr;
+    if (foreground)
+    {
+        DWORD processId = 0;
+        foregroundThreadId = GetWindowThreadProcessId(foreground, &processId);
+        if (foregroundThreadId != 0)
+        {
+            // A TIP profile owns a system-synthesized HKL that is unique per
+            // profile (00000804 plain Chinese layout, E0220804 Sogou,
+            // E0230804 Bing), so the foreground thread's layout names its
+            // input method across processes. A failed query is not a
+            // verdict: keep the current visibility.
+            foregroundLayout = GetKeyboardLayout(foregroundThreadId);
+        }
+    }
+
+    const bool foreign = foregroundLayout != nullptr && foregroundLayout != GetKeyboardLayout(GetCurrentThreadId());
+    // The Win+. panel is hosted by TextInputHost.exe, so it must not be read as
+    // "the user moved to another input method". Telling the two apart costs a
+    // process query, and document focus callbacks arrive per edit, so it is
+    // only paid when the layouts actually disagree: a foreground window that
+    // shares this thread's layout is this input method either way.
+    //
+    // The foreground window is absent (secure desktop), is the Win+. panel, or
+    // could not be resolved: none of those means "the user moved to another
+    // input method", so the toolbar stays as it is.
+    const bool resolved = foregroundLayout != nullptr && !(foreign && IsWindowsTextInputHostWindow(foreground));
+    const ToolbarVisibilityDecision decision = DecideToolbarVisibility(_ownProfileActiveInThread, resolved, foreign);
+    if ((logKeepDecision || decision != ToolbarVisibilityDecision::Claim) &&
+        Global::TsfDiagnosticLogEnabled.load(std::memory_order_relaxed))
+    {
+        QueueTsfDiagnosticLog(fmt::format(L"[toolbar-visibility] {}: fg={:#x} tid={} hkl_fg={:#x} "
+                                          L"hkl_own={:#x} own_profile={} -> {}",
+                                          source ? source : L"unspecified", reinterpret_cast<uintptr_t>(foreground),
+                                          foregroundThreadId, reinterpret_cast<uintptr_t>(foregroundLayout),
+                                          reinterpret_cast<uintptr_t>(GetKeyboardLayout(GetCurrentThreadId())),
+                                          _ownProfileActiveInThread,
+                                          decision == ToolbarVisibilityDecision::Hide    ? L"hide"
+                                          : decision == ToolbarVisibilityDecision::Claim ? L"claim"
+                                                                                         : L"keep"));
+    }
+    return decision;
+}
+
+bool CMetasequoiaIME::_ForegroundWindowRunsAnotherInputMethod(bool logKeepDecision)
+{
+    return _DecideToolbarVisibilityForForegroundWindow(L"focus-gate", logKeepDecision) ==
+           ToolbarVisibilityDecision::Hide;
+}
+
+bool CMetasequoiaIME::_ForegroundWindowUsesThisInputMethod()
+{
+    return _DecideToolbarVisibilityForForegroundWindow(L"focus-return", false) == ToolbarVisibilityDecision::Claim;
+}
+
+bool CMetasequoiaIME::_EndToolbarClaimForForeignForegroundWindow(const wchar_t *source)
+{
+    if (_DecideToolbarVisibilityForForegroundWindow(source) != ToolbarVisibilityDecision::Hide)
+    {
+        return false;
+    }
+
+    // End only the Server's active UI route. Keep this TSF instance and its
+    // pipe handles alive so returning to this thread can activate it again.
+    _CancelForegroundInputMethodCheck();
+    if (Global::g_connected)
+    {
+        FlushNamedpipeImeDeactivation();
+        MarkNamedpipeFocusLost();
+        Global::g_connected = false;
+    }
+    return true;
+}
+
+void CMetasequoiaIME::_ScheduleForegroundInputMethodCheck()
+{
+    if (!_msgWndHandle || !IsWindow(_msgWndHandle) || _focusLostToWindowsTextInputHost ||
+        _foregroundInputMethodCheckStarted != 0)
+    {
+        return;
+    }
+
+    _foregroundInputMethodCheckStarted = GetTickCount64();
+    if (!SetTimer(_msgWndHandle, TIMER_FOREGROUND_INPUT_METHOD_CHECK, FOREGROUND_INPUT_METHOD_CHECK_INTERVAL_MS,
+                  nullptr))
+    {
+        _foregroundInputMethodCheckStarted = 0;
+    }
+}
+
+void CMetasequoiaIME::_CancelForegroundInputMethodCheck()
+{
+    if (_msgWndHandle && IsWindow(_msgWndHandle))
+    {
+        KillTimer(_msgWndHandle, TIMER_FOREGROUND_INPUT_METHOD_CHECK);
+    }
+    _foregroundInputMethodCheckStarted = 0;
 }
 
 void CMetasequoiaIME::_ScheduleFocusedInputModeAnnouncement()
@@ -101,6 +231,7 @@ STDAPI CMetasequoiaIME::OnSetThreadFocus()
     {
         return S_OK;
     }
+    _CancelForegroundInputMethodCheck();
     // Do not consume this marker here. TextInputHost owns a separate TSF
     // client, so the authoritative document OnSetFocus must use it to force a
     // new Server activation even when our local pipe handles still look live.
@@ -166,12 +297,34 @@ STDAPI CMetasequoiaIME::OnKillThreadFocus()
         KillTimer(_msgWndHandle, TIMER_FOCUS_CARET_STATE);
     }
 
+    // "Let me use a different input method for each app window" moves the user
+    // to a window whose active input method is not this text service without
+    // routing through Deactivate() or OnActivated(FALSE) here: this thread's
+    // profile never changed, and the focused thread never activated us. Thread
+    // focus loss is therefore the only observable signal. Mirror
+    // OnActivated(isActivated = FALSE): terminal deactivation of the UI session
+    // (the Server hides the toolbar) without TIP teardown, so the pipes and
+    // the profile survive the trip back.
+    if (!_EndToolbarClaimForForeignForegroundWindow(L"focus-left") && _ForegroundWindowUsesThisInputMethod())
+    {
+        // The foreground HWND may still identify the old window during this
+        // callback. Recheck on the message loop until it settles or the
+        // deferral timer decides; only the hide is ever taken from those
+        // rechecks, so a switch that lands late still hides the toolbar
+        // promptly. A foreground that names no input method at all (the Win+.
+        // panel, the secure desktop) is left alone, exactly as before.
+        _ScheduleForegroundInputMethodCheck();
+    }
+
     // ITfThreadFocusSink reports temporary auxiliary UI transitions as well
     // as real application focus changes. The known-good implementation did
     // not use this callback as an IPC/session boundary: document/top-context
     // changes are already handled by ITfThreadMgrEventSink, and TIP switching
     // is handled by Deactivate. Keep the current composition and pipe epoch
-    // intact here, especially for TextInputHost.exe / Win+..
+    // intact here, especially for TextInputHost.exe / Win+.. The block above
+    // is the single exception: a per-app-window switch to another input
+    // method produces no same-thread TIP switch, so this callback is the only
+    // observable signal that the user moved to a window not using this tip.
     if (_pCandidateListUIPresenter)
     {
         ITfDocumentMgr *pCandidateListDocumentMgr = nullptr;

@@ -35,6 +35,7 @@ STDAPI CMetasequoiaIME::OnActivated(_In_ REFCLSID clsid, _In_ REFGUID guidProfil
         // profile switches in an already-running host. Use the same
         // ShellExecute-based wake path so packaged/UWP hosts do not pass
         // their package identity to the Server.
+        _ownProfileActiveInThread = true;
         _WakeServerIfNeeded();
         _AddTextProcessorEngine();
     }
@@ -44,6 +45,7 @@ STDAPI CMetasequoiaIME::OnActivated(_In_ REFCLSID clsid, _In_ REFGUID guidProfil
         // user selected another TIP. Deactivate() sends the same idempotent
         // event again during teardown, but may run after the Main pipe has
         // already become unavailable.
+        _ownProfileActiveInThread = false;
         FlushNamedpipeImeDeactivation();
     }
 

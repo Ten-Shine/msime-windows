@@ -77,6 +77,11 @@ target_include_directories(test_focus_announcement_policy PRIVATE ../src)
 target_compile_features(test_focus_announcement_policy PRIVATE cxx_std_17)
 add_test(NAME focus_announcement_policy COMMAND test_focus_announcement_policy)
 
+add_executable(test_toolbar_visibility_policy toolbar_visibility_policy.cpp)
+target_include_directories(test_toolbar_visibility_policy PRIVATE ../src)
+target_compile_features(test_toolbar_visibility_policy PRIVATE cxx_std_17)
+add_test(NAME toolbar_visibility_policy COMMAND test_toolbar_visibility_policy)
+
 # Exercise the production reconnect sequencing without loading a TIP into a host.
 # Regenerate the fixture when either handler changes, so a missing recovery step
 # cannot be hidden by a copied implementation in the test.
