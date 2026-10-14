@@ -5,7 +5,6 @@
 #include "../common/helpcode_utils.h"
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <limits>
 #include <string_view>
 #include <unordered_map>
@@ -68,36 +67,6 @@ bool literal_jianpin_pinyin_match(const std::string &raw, const std::string &cod
         letters += typed[i];
     }
     return letters == raw;
-}
-
-std::string fold_autocorrect_letters(const std::string &text)
-{
-    std::string folded;
-    folded.reserve(text.size());
-    for (const char ch : text)
-    {
-        if (ch == '\'')
-        {
-            continue;
-        }
-        folded.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    return folded;
-}
-
-bool is_literal_whole_word(const WordItem &item, const std::string &folded_input)
-{
-    if (item.source != CandidateSource::Database && item.source != CandidateSource::UserDatabase)
-    {
-        return false;
-    }
-    // 比的是匹配码 item.pinyin：query_database 生成候选时把输入按读音切分（rug → ru + g），
-    // item.pinyin 就是这个切分 ru'g，上屏时引擎按它消费输入字母。rug 的「如果」匹配码 ru'g
-    // 折后是 rug，正好等于整串输入 rug，选它能把框整个清空 → 算完全匹配、英文不置顶。
-    // 不比 canonical_pinyin——那是词库键（如果 的全拼是 ru'guo），折后 ruguo ≠ rug，比它反而
-    // 漏掉这种「部分读音也整框清空」的候选。potato 的「破」匹配码 po，折后 po ≠ potato，框里
-    // 还留 tato，不算。真正的判定就是「候选匹配码折后是否正好等于整串输入（上屏清框）」。
-    return fold_autocorrect_letters(item.pinyin) == folded_input;
 }
 
 namespace

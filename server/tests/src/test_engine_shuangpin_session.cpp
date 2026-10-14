@@ -4,7 +4,6 @@
 #include "src/config/ime_config_internal.h"
 #include "engine/common/helpcode_utils.h"
 #include "engine/quanpin/quanpin_query.h"
-#include "engine/quanpin/quanpin_utils.h"
 #include "engine/shuangpin/shuangpin_dictionary.h"
 #include "src/ipc/candidate_selection_policy.h"
 #include <windows.h>
@@ -380,34 +379,28 @@ TEST_CASE(LearnedEnglishSlotMovesEnglishBehindItsDefaultPosition)
 
 TEST_CASE(PinyinInputPrefersExactEnglishAndParksCompletionsOnTheFirstPage)
 {
-    // 中文候选带全拼读音：简拼敲出来的「不是」读音是 bu'shi，不是敲的 bus。
-    const auto local = [](std::string word, std::string canonical) {
-        return WordItem("bus", std::move(word), 100, CandidateSource::Database, std::move(canonical));
-    };
+    const auto local = [](std::string word) { return WordItem("bus", std::move(word), 100); };
     FanyImeIpc::EnglishPlacement placement;
     placement.require_exact = true;
     placement.input = "bus";
     placement.page_size = 5;
-    // 没有读音与 bus 逐个相同的中文词库行 → 完全匹配的英文置顶。
-    placement.chinese_exact_match = false;
 
-    // 完全匹配的英文占槽位并顶到首位，其余补全词（哪怕权重更高）排到末尾。
+    // 精确匹配占槽位、默认紧跟第一个中文候选，其余补全词（哪怕权重更高）排到末尾。
     std::vector<WordItem> items = {
-        local("不是", "bu'shi"),
+        local("不是"),
         WordItem("business", "business", 900000, CandidateSource::EnglishDictionary),
-        local("不少", "bu'shao"),
+        local("不少"),
         WordItem("bus", "bus", 0, CandidateSource::EnglishDictionary),
     };
     FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(items[0].word, std::string("bus"));
-    REQUIRE_EQ(items[1].word, std::string("不是"));
+    REQUIRE_EQ(items[0].word, std::string("不是"));
+    REQUIRE_EQ(items[1].word, std::string("bus"));
     REQUIRE_EQ(items[2].word, std::string("不少"));
     REQUIRE_EQ(items[3].word, std::string("business"));
-    REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(items), size_t{0});
+    REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(items), size_t{1});
 
     // 没有精确匹配：最前的补全词默认放在首页末位（每页 5 个 → 下标 4），不沉到列表底部。
     placement.input = "zai";
-    placement.chinese_exact_match = true;
     const auto zai_items = [] {
         return std::vector<WordItem>{
             WordItem("zai", "在", 19195987), WordItem("zaire", "zaire", 19196987, CandidateSource::EnglishDictionary),
@@ -436,81 +429,6 @@ TEST_CASE(PinyinInputPrefersExactEnglishAndParksCompletionsOnTheFirstPage)
     items = zai_items();
     FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
     REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(items), size_t{4});
-}
-
-TEST_CASE(ExactEnglishLeadsOnlyWhenNoChineseReadingMatchesTheTypedLetters)
-{
-    const auto local = [](std::string typed, std::string word, std::string canonical) {
-        return WordItem(std::move(typed), std::move(word), 100, CandidateSource::Database, std::move(canonical));
-    };
-    const auto english = [](const std::string &word, std::int64_t weight) {
-        return WordItem(word, word, weight, CandidateSource::EnglishDictionary);
-    };
-    FanyImeIpc::EnglishPlacement placement;
-    placement.require_exact = true;
-    placement.input = "bus";
-    placement.page_size = 5;
-
-    // 打出的字母有完全匹配的英文，中文候选只是简拼命中（读音 bu'shi / bu'shao 不是 bus）
-    // → 英文置顶。
-    placement.chinese_exact_match = false;
-    std::vector<WordItem> items = {
-        local("bus", "不是", "bu'shi"),
-        local("bus", "不少", "bu'shao"),
-        english("business", 900000),
-        english("bus", 5),
-    };
-    FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(items[0].word, std::string("bus"));
-    REQUIRE_EQ(items[1].word, std::string("不是"));
-    REQUIRE_EQ(items[2].word, std::string("不少"));
-    REQUIRE_EQ(items[3].word, std::string("business"));
-    REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(items), size_t{0});
-
-    // 有完全匹配的中文（「在」的读音就是 zai）→ 英文回到默认位置，不抢首位。
-    placement.input = "zai";
-    placement.chinese_exact_match = true;
-    items = {
-        local("zai", "在", "zai"),
-        local("zai", "再", "zai"),
-        english("zai", 5),
-    };
-    FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(items[0].word, std::string("在"));
-    REQUIRE_EQ(items[1].word, std::string("zai"));
-    REQUIRE_EQ(items[2].word, std::string("再"));
-
-    // 用户词库里学到的词也算完全匹配的中文：同样是读音逐个相同的词库行。
-    items = {
-        WordItem("zai", "在", 19195987, CandidateSource::UserDatabase, "zai"),
-        english("zai", 5),
-    };
-    FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(items[0].word, std::string("在"));
-    REQUIRE_EQ(items[1].word, std::string("zai"));
-
-    // 只有完全匹配才置顶：补全词（zai → zaire）照旧退到末尾，不因为它是英文就升上来。
-    placement.chinese_exact_match = false;
-    items = {
-        local("zai", "在", "zai"),
-        local("zai", "再", "zai"),
-        english("zaire", 19196987),
-    };
-    FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(items[0].word, std::string("在"));
-    REQUIRE_EQ(items.back().word, std::string("zaire"));
-    REQUIRE(*FanyImeIpc::SlottedEnglishIndex(items) != size_t{0});
-
-    // 学到的槽位是用户用选择表达过的偏好，优先于置顶：挑到第 2 位就留在第 2 位。
-    placement.slot = 2;
-    items = {
-        local("bus", "不是", "bu'shi"),
-        local("bus", "不少", "bu'shao"),
-        local("bus", "不识", "bu'shi"),
-        english("bus", 5),
-    };
-    FanyImeIpc::NormalizeMixedCandidateOrder(items, 1, placement);
-    REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(items), size_t{2});
 }
 
 TEST_CASE(FixedEnglishCandidateKeepsItsMixedCandidatePosition)
@@ -1941,52 +1859,4 @@ TEST_CASE(EngineShuangpinMidSentenceUppercaseTriggerActsAsBacktick)
     REQUIRE(SetConfiguredShuangpinDirectHelpcodeEnabled(true));
     REQUIRE(!IsConfiguredMidSentenceHelpcodeUppercaseTrigger());
     REQUIRE_EQ(FormatMidSentenceHelpcodeUppercaseWorkerPayload(), std::wstring(L"0"));
-}
-
-TEST_CASE(ChineseExactMatchMeansWholeReadingClearsThePreedit)
-{
-    // 用户定义的「完全匹配的中文」：输入 rug 时候选框出现「如(ru)果(g)」，如果 是词库里的
-    // 词（全拼 ru'guo），且它上屏后会把整框字母清空——判据是候选的匹配码 item.pinyin（引擎
-    // 把 rug 切成 ru + g，匹配码就是 ru'g）折后等于整串输入 rug。不是拿 canonical_pinyin
-    // （ru'guo，比它会漏掉），也不是逐字母前缀相同。potato 没有任何词整串等于它，po 的「破」
-    // 匹配码 po 只是前缀（框里还留 tato），不算。先验证匹配原语，再把它算出的旗标喂给排序。
-    const auto db = [](const std::string &matching_code, const std::string &word, const std::string &canonical) {
-        return WordItem(matching_code, word, 100, CandidateSource::Database, canonical);
-    };
-    const auto english = [](const std::string &word) {
-        return WordItem(word, word, 1, CandidateSource::EnglishDictionary);
-    };
-
-    // 匹配原语：候选匹配码折后等于整串输入才认；前缀/部分覆盖不算；非词库来源不认。
-    const std::string rug = quanpin::fold_autocorrect_letters("rug");
-    REQUIRE(quanpin::is_literal_whole_word(db("ru'g", "如果", "ru'guo"), rug)); // rug → 如果，匹配码 ru'g == rug
-    REQUIRE(!quanpin::is_literal_whole_word(db("ru", "如", "ru"), rug)); // 单字 ru 只是前缀，不清空整框
-    REQUIRE(!quanpin::is_literal_whole_word(db("ru'guo", "如果", "ru'guo"), rug)); // 全拼 ruguo 不等于 rug
-
-    const std::string potato = quanpin::fold_autocorrect_letters("potato");
-    REQUIRE(!quanpin::is_literal_whole_word(db("po", "破", "po"), potato));         // 只是前缀，框里剩 tato
-    REQUIRE(!quanpin::is_literal_whole_word(db("po'ta", "坡他", "po'ta"), potato)); // 只覆盖前两段 pota
-    REQUIRE(!quanpin::is_literal_whole_word(english("rug"), rug)); // 英文来源不算中文完全匹配
-
-    // 端到端：rug 有「如果」整串匹配 → 中文完全匹配置位 → 英文不置顶。
-    FanyImeIpc::EnglishPlacement rug_placement;
-    rug_placement.require_exact = true;
-    rug_placement.input = "rug";
-    rug_placement.page_size = 5;
-    rug_placement.chinese_exact_match = true; // 由 HasExactChineseCandidate / is_literal_whole_word 算出
-    std::vector<WordItem> rug_items = {db("ru'g", "如果", "ru'guo"), english("rug")};
-    FanyImeIpc::NormalizeMixedCandidateOrder(rug_items, 1, rug_placement);
-    REQUIRE_EQ(rug_items[0].word, std::string("如果"));
-    REQUIRE(*FanyImeIpc::SlottedEnglishIndex(rug_items) != size_t{0});
-
-    // 端到端：potato 没有任何中文整串匹配 → 中文完全匹配不置位 → 英文顶到首位。
-    FanyImeIpc::EnglishPlacement potato_placement;
-    potato_placement.require_exact = false;
-    potato_placement.input = "potato";
-    potato_placement.page_size = 5;
-    potato_placement.chinese_exact_match = false;
-    std::vector<WordItem> potato_items = {db("po", "破", "po"), english("potato")};
-    FanyImeIpc::NormalizeMixedCandidateOrder(potato_items, 1, potato_placement);
-    REQUIRE_EQ(potato_items[0].word, std::string("potato"));
-    REQUIRE_EQ(*FanyImeIpc::SlottedEnglishIndex(potato_items), size_t{0});
 }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../core/word_item.h"
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -33,26 +32,6 @@ unsigned literal_mixed_pinyin_match(const std::string &raw, const std::string &c
 // 纯简拼字面整词：两个及以上单字母声母（a/e/o 是完整音节，不算）盖住整串输入，且逐个是
 // 候选正读音节的首字母（nbn = n'b'n -> neng'bu'neng）。前缀单字和带完整音节的混合简拼不算。
 bool literal_jianpin_pinyin_match(const std::string &raw, const std::string &code, const std::string &canonical);
-
-// Folds letters for comparison: lowercases and strips manual delimiters. v and u must
-// compare as distinct letters — the ü-style alias rewrite is a first-class marking source
-// (the trailing star badge), so 'nve' (primary segmentation) differing from typed 'nue' is
-// exactly what produces the corrected_from label. The old contract ("aliases never look
-// rewritten, hence never marked") was flipped by product decision.
-std::string fold_autocorrect_letters(const std::string &text);
-// 字面整词（完全匹配的中文）：候选来自中文词库（词库或用户词库），且选它上屏能把候选框
-// 字母整个清空——也就是引擎为这串输入生成的候选里，有词/字上屏后整框清空。判据比的是候选
-// 的匹配码 item.pinyin（不是 canonical_pinyin）：query_database 生成候选时把输入按读音切分，
-// item.pinyin 就是这个切分（ru'g 这种），上屏时引擎按它消费输入字母，折后正好等于整串输入
-// 就清空整框。例：打 rug，引擎切成 ru + g，「如果」(词库全拼 ru'guo) 出现，匹配码 ru'g 折得
-// rug，正好等于 rug → 选它能清空整框 → 算完全匹配、英文不置顶；如果的全拼是 ru'guo，比
-// canonical_pinyin 反而漏掉它。potato 的「破」匹配码 po，折得 po ≠ potato，只清前缀、框里还
-// 留 tato → 不算。注意这是「匹配码折后等于整串输入」不是「逐字母前缀相同」：匹配码必须铺满
-// 全部输入，拦腰截断的部分匹配（ru 的「如」只清 ru）不算。folded_input 必须是
-// fold_autocorrect_letters(输入) 的结果（整份候选列表共用，调用方先折一次）；敲的字母先换成
-// 全拼再折——双拼敲码（zl → 在），两种方案下候选的 item.pinyin 都是全拼切分。
-bool is_literal_whole_word(const WordItem &item, const std::string &folded_input);
-
 SyllableGraph build_syllable_graph(const std::string &pinyin);
 std::vector<Segments> enumerate_complete_segmentations(const SyllableGraph &graph, size_t path_limit = 32);
 std::vector<std::string> cut_one_piece_greedy(const std::string &pinyin, bool intact_only);
