@@ -64,7 +64,7 @@ ctest --test-dir build --output-on-failure --timeout 20
 
 `msime.db`、`english.db`、`others.db`、`dict_japanese.dat` 都来自 `product-lock.json` 钉住的词库 Release，构建时下载；建库流水线不在本仓库内。查询侧用的格式契约是 `contracts/dictionary/format.json`，改它等于改一个已经发布的词库的读法，务必确认锁住的那一版词库仍然符合新规则。
 
-候选窗的中英翻译除 `english.db` 的大表外还有一层人工覆盖：`english.db` 同目录的 `custom_translations.txt`，格式 `源<Tab>释义`，优先级高于大表（`english/english_dictionary.cpp`）。要纠正个别释义改这里，不要动 ECDICT 生成的大表。
+候选窗的中英翻译除 `english.db` 的大表外还有一层人工补充：`english.db` 同目录的 `custom_translations.txt`，格式 `源<Tab>释义`。它**不是整条覆盖大表，而是去重后追加**：先去掉词性前缀，再按大小写不敏感比较，一致即算重复；重复时保留带词性的写法。合并与去重规则在 `english/translation_gloss.h`，查询入口在 `english/english_dictionary.cpp`；释义串的格式（分隔符、词性前缀）也只定义在那一个头文件里，服务端显示和 Ctrl+Enter 上屏引用同一份。要补充或纠正个别释义改这里，不要动 ECDICT 生成的大表——但注意追加语义：与大表释义写法不同的“纠正”会两条都显示出来。
 
 ## 提交
 
