@@ -38,7 +38,7 @@ pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion 1.2.3 -RepoRoot .. `
 
 - 默认值 `%LOCALAPPDATA%\metasequoiaime`；升级安装时默认沿用上次的位置
 - 选择写进 `HKLM\Software\Metasequoia\MetasequoiaIME` 的 `DataDir`。这是运行期唯一的权威来源：Server（`server/src/utils/ime_paths.cpp`）、TSF DLL（`windows/src/Utils/FanyUtils.cpp`）和引擎（`engine/core/data_path.h`）各自按 `METASEQUOIA_IME_DATA_DIR` 环境变量 → 该注册表值 → `%LOCALAPPDATA%\metasequoiaime` 的顺序解析，三处必须保持一致。32 位 TSF DLL 用 `KEY_WOW64_64KEY` 读，所以这个值必须写在 64 位视图里
-- 升级时改了位置，安装器会把用户词库（`msime_user.db` 及其 WAL/SHM）、`config.toml`、`config.base.toml` 和 `skins\` 搬到新目录，再删掉旧目录；词库和设置窗口的图片资源由本次安装重新写入，不搬
+- 升级时改了位置，安装器会把用户词库（`msime_user.db` 及其 WAL/SHM）、`config.toml`、`config.base.toml`、`custom_translations.txt` 和 `skins\` 搬到新目录，再删掉旧目录；词库和设置窗口的图片资源由本次安装重新写入，不搬
 - **数据目录必须整个归输入法**（[#537](https://github.com/metasequoiaime/MSIME-Windows/issues/537)）。用户选的目录里已经有别的文件、或者选了驱动器根目录时，安装器改用其中的 `metasequoiaime` 子目录，并在向导里把实际位置告诉用户；连那个子目录也不空就拒绝。输入法用过的目录（有标记，或历史默认位置）原样沿用
 - 安装器在数据目录里放一个 `.metasequoiaime-data` 标记文件。只有标记里带 `exclusive: adopted empty by the installer` 这一行（安装时目录是空的），或目录就是历史默认位置，覆盖安装才整目录清理、卸载才整目录删除
 - 旧版安装器不管目录里原来有什么都写标记，所以只有旧标记（没有那一行）的目录不能再信：覆盖安装、换目录和卸载都只按 `IsShippedAppDataItem` / `IsRuntimeAppDataItem` / `IsPreservedAppDataItem` 名单删输入法自己的条目，`assets`、`logs`、`skins` 这种通用目录名（以及已退役的 `html`）只删输入法写进去的部分，最后目录空了才删目录。包里新增顶层文件要同步 `IsShippedAppDataItem`，`tests/package-files.ps1` 会拿真实打出的 `app_data` 核对；Server 在数据目录根下新写文件要同步 `IsRuntimeAppDataItem`

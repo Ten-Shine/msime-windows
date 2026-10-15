@@ -13,11 +13,12 @@ $issPath = Join-Path $PSScriptRoot '../msime_setup.iss'
 $iss = [IO.File]::ReadAllText((Resolve-Path $issPath))
 
 # 必须活过覆盖安装的用户数据。主库 + 三个 sidecar：安装器会强杀 Server，WAL 里可能还有尚未
-# checkpoint 的写入，只搬主库会丢掉最后一批。
+# checkpoint 的写入，只搬主库会丢掉最后一批。custom_translations.txt 没有出厂副本可回退，
+# 漏掉它同样是内容彻底丢失。
 $required = @(
     'msime_user.db', 'msime_user.db-wal', 'msime_user.db-shm', 'msime_user.db-journal',
     'stats.db', 'stats.db-wal', 'stats.db-shm', 'stats.db-journal',
-    'config.toml', 'config.base.toml'
+    'config.toml', 'config.base.toml', 'custom_translations.txt'
 )
 
 # 目录类用户数据由 MigrateUserDataDir 单独 robocopy，迁移清单按文件解析取不到它们。

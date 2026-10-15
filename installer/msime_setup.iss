@@ -781,6 +781,14 @@ begin
     (CompareText(FileName, 'config.base.toml') = 0);
 end;
 
+function IsUserTranslationFile(const FileName: String): Boolean;
+begin
+  { 候选窗中英翻译的人工覆盖表，由用户手工放在数据目录根下（README「自定义候选窗翻译」一节），
+    安装包不携带、引擎只读不写。它没有 config.toml 那样的出厂副本可回退，删掉就是内容
+    彻底丢失，所以必须与用户配置同等对待。}
+  Result := CompareText(FileName, 'custom_translations.txt') = 0;
+end;
+
 function IsUserSkinDirectory(const FileName: String): Boolean;
 begin
   { 外部皮肤在 %LOCALAPPDATA%\metasequoiaime\skins，升级安装不得清掉。}
@@ -812,6 +820,7 @@ begin
     IsUserDatabaseFile(FileName) or
     IsUserStatisticsDatabase(FileName) or
     IsUserConfigFile(FileName) or
+    IsUserTranslationFile(FileName) or
     IsUserSkinDirectory(FileName) or
     IsUserShuangpinDirectory(FileName) or
     IsCollocationModelDirectory(FileName) or
@@ -1370,7 +1379,7 @@ begin
     '"' + RemoveBackslashUnlessRoot(OldDir) + '" "' + RemoveBackslashUnlessRoot(NewDir) + '" ' +
     'msime_user.db msime_user.db-wal msime_user.db-shm msime_user.db-journal ' +
     'stats.db stats.db-wal stats.db-shm stats.db-journal ' +
-    'config.toml config.base.toml /MOVE /R:2 /W:1 /NJH /NJS /NP /NFL /NDL',
+    'config.toml config.base.toml custom_translations.txt /MOVE /R:2 /W:1 /NJH /NJS /NP /NFL /NDL',
     '',
     SW_HIDE,
     ewWaitUntilTerminated,
