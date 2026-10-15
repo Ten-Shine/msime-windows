@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "engine/english/translation_gloss.h"
 #include "input_key_policy.h"
 
 namespace FanyImeIpc
@@ -22,30 +24,11 @@ constexpr bool IsTranslationCommitKey(uint32_t keycode, uint32_t modifiers_down)
 // The machine-translated zh->en glosses (sources/cn-en/ in msime-dictionary) lead
 // each sense with a part-of-speech label: "n. silver medal", "proper n. Wanshan
 // District", "adj. spreading; n. sound of laughter". The label is shown in the
-// candidate window but must not reach the committed text.
-// Returns the length of the label at the start of `sense` without its trailing
-// space ("n." -> 2), or 0 when the sense has no label.
-inline size_t PartOfSpeechLabelLength(std::string_view sense)
-{
-    static constexpr std::string_view kLabels[] = {"proper n. ", "interj. ", "idiom. ", "pron. ", "prep. ", "conj. ",
-                                                   "adj. ",      "adv. ",    "num. ",   "det. ",  "aux. ",  "n. ",
-                                                   "v. ",        "phr. ",    "int. ",   "part. "};
-    for (const auto label : kLabels)
-    {
-        if (sense.size() > label.size() && sense.substr(0, label.size()) == label)
-            return label.size() - 1;
-    }
-    return 0;
-}
-
-inline std::string_view StripPartOfSpeechLabel(std::string_view sense)
-{
-    const size_t label = PartOfSpeechLabelLength(sense);
-    if (label == 0)
-        return sense;
-    const size_t rest = sense.find_first_not_of(' ', label);
-    return rest == std::string_view::npos ? sense : sense.substr(rest);
-}
+// candidate window but must not reach the committed text. The label set and the
+// gloss format live in the engine, which needs the same rules to deduplicate the
+// glosses it merges from custom_translations.txt.
+using translation_gloss::PartOfSpeechLabelLength;
+using translation_gloss::StripPartOfSpeechLabel;
 
 enum class TranslationSegmentKind
 {
@@ -177,29 +160,9 @@ constexpr uint32_t TranslationDigitPosition(uint32_t keycode, uint32_t modifiers
 // Header-only pure policy so tests can pin it without linking the server stack.
 inline std::vector<std::string> SplitTranslationGloss(std::string_view gloss)
 {
-    static constexpr std::string_view kFullwidthSemicolon = "\xEF\xBC\x9B";
     std::vector<std::string> senses;
-    size_t start = 0;
-    const auto push = [&senses](std::string_view sense) {
-        const size_t first = sense.find_first_not_of(" \t\r\n");
-        if (first == std::string_view::npos)
-            return;
-        const size_t last = sense.find_last_not_of(" \t\r\n");
-        senses.emplace_back(StripPartOfSpeechLabel(sense.substr(first, last - first + 1)));
-    };
-    while (start <= gloss.size())
-    {
-        const size_t ascii = gloss.find(';', start);
-        const size_t fullwidth = gloss.find(kFullwidthSemicolon, start);
-        const size_t cut = (std::min)(ascii, fullwidth);
-        if (cut == std::string_view::npos)
-        {
-            push(gloss.substr(start));
-            break;
-        }
-        push(gloss.substr(start, cut - start));
-        start = cut + (cut == fullwidth ? kFullwidthSemicolon.size() : 1);
-    }
+    for (const auto sense : translation_gloss::SplitSenses(gloss))
+        senses.emplace_back(StripPartOfSpeechLabel(sense));
     return senses;
 }
 } // namespace FanyImeIpc

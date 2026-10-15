@@ -52,7 +52,7 @@ cd .\tests\
 
 引擎读取的词库**不在本目录内**，也不由本仓库构建：`msime.db`（全拼、五笔、快捷短语、日语词表）、`english.db`（英文候选与中英释义）、`others.db`（emoji、颜文字、符号）、`dict_japanese.dat`（日语整句模型）都来自 `product-lock.json` 钉住的词库 Release，构建时下载。建库流水线随专门化一并移除，见 [UPSTREAM.md](UPSTREAM.md)。
 
-候选窗的中英翻译除了 `english.db` 的大表之外，还有一层人工覆盖：`english.db` 同目录下的 `custom_translations.txt`，格式为 `源<Tab>释义`，优先级高于大表（见 `english/english_dictionary.cpp`）。要纠正某条释义时改这里，不要动 ECDICT 生成的大表。
+候选窗的中英翻译除了 `english.db` 的大表之外，还有一层人工补充：`english.db` 同目录下的 `custom_translations.txt`，格式为 `源<Tab>释义`。它不是整条覆盖大表，而是去重后追加：去掉词性前缀、按大小写不敏感比较，一致即算重复，重复时保留带词性的写法（`english/english_dictionary.cpp` 与 `english/translation_gloss.h`）。要补充或纠正某条释义时改这里，不要动 ECDICT 生成的大表。
 
 词库命名的权威定义是 `contracts/dictionary/format.json`，C++ 查询和仓库根的 `scripts/dictionary_product.py` 共用同一份，禁止在消费端复制规则。
 

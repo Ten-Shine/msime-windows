@@ -1,5 +1,6 @@
 #include "../contracts/assets/assets.h"
 #include "english_dictionary.h"
+#include "translation_gloss.h"
 #include "../core/data_path.h"
 
 #include <algorithm>
@@ -105,18 +106,22 @@ std::string QueryGloss(sqlite3_stmt *statement, const std::string &key)
 
 std::string EnglishDictionary::query_chinese_gloss(const std::string &english)
 {
+    const std::string builtin =
+        english.empty() || !ensure_gloss_statements() ? std::string{} : QueryGloss(en_zh_statement_, english);
     const auto custom = custom_en_zh_.find(english);
-    if (custom != custom_en_zh_.end())
-        return custom->second;
-    return english.empty() || !ensure_gloss_statements() ? std::string{} : QueryGloss(en_zh_statement_, english);
+    if (custom == custom_en_zh_.end())
+        return builtin;
+    return translation_gloss::Merge(builtin, custom->second, translation_gloss::kChineseGlossSeparator);
 }
 
 std::string EnglishDictionary::query_english_gloss(const std::string &chinese)
 {
+    const std::string builtin =
+        chinese.empty() || !ensure_gloss_statements() ? std::string{} : QueryGloss(zh_en_statement_, chinese);
     const auto custom = custom_zh_en_.find(chinese);
-    if (custom != custom_zh_en_.end())
-        return custom->second;
-    return chinese.empty() || !ensure_gloss_statements() ? std::string{} : QueryGloss(zh_en_statement_, chinese);
+    if (custom == custom_zh_en_.end())
+        return builtin;
+    return translation_gloss::Merge(builtin, custom->second, translation_gloss::kEnglishGlossSeparator);
 }
 
 bool EnglishDictionary::upsert_gloss(const std::string &db_path, bool chinese_to_english, const std::string &key,
