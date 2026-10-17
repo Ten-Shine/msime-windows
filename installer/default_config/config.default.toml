@@ -40,6 +40,16 @@ floating_toolbar_auto_hide = false
 floating_toolbar_auto_hide_delay = 5
 # 悬浮工具栏阴影（与候选窗一致的柔和阴影）
 floating_toolbar_shadow = true
+# 悬浮工具栏背景不透明度（百分比），可选：1–100，100 为完全不透明；落在卡片、描边、悬停底色、分隔线等绘制颜色上
+floating_toolbar_background_opacity = 100
+# 悬浮工具栏前景不透明度（百分比），可选：1–100；只作用于 D2D 渲染的图标与文字
+floating_toolbar_foreground_opacity = 100
+# 自动降低不透明度：显示一段时间无交互后降到下方不透明度；鼠标悬停时不降低，切换中英等状态变化时回到原不透明度
+floating_toolbar_auto_dim = false
+# 无交互后的不透明度（百分比），可选：1–100
+floating_toolbar_auto_dim_opacity = 50
+# 自动降低不透明度延时（秒），可选：1–60
+floating_toolbar_auto_dim_delay = 5
 # 翻页方式
 paging_minus_equal = true
 paging_comma_period = true
@@ -202,6 +212,10 @@ candidate_window_preedit_font_size = 15
 cand_text_color = "auto"
 # 每页候选词数量，可选：3, 4, 5, 6, 7, 8, 9
 page_size = 6
+# 候选窗口背景不透明度（百分比），可选：1–100，100 为完全不透明；落在卡片填充、描边、选中与悬停底色等绘制颜色上
+candidate_window_background_opacity = 100
+# 候选窗口前景不透明度（百分比），可选：1–100；只作用于 D2D 渲染的文字、序号与译文
+candidate_window_foreground_opacity = 100
 # 候选窗口严格按文字所需的宽度收紧，不垫出厂最小宽度；皮肤 skin.toml 的 fit_content 打开时始终收紧
 candidate_window_fit_content = false
 # 候选窗口跟随光标

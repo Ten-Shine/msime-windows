@@ -510,6 +510,11 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"floating_toolbar_auto_hide", GetConfiguredFloatingToolbarAutoHide()},
             {"floating_toolbar_auto_hide_delay", GetConfiguredFloatingToolbarAutoHideDelay()},
             {"floating_toolbar_shadow", GetConfiguredFloatingToolbarShadow()},
+            {"floating_toolbar_background_opacity", GetConfiguredFloatingToolbarBackgroundOpacity()},
+            {"floating_toolbar_foreground_opacity", GetConfiguredFloatingToolbarForegroundOpacity()},
+            {"floating_toolbar_auto_dim", GetConfiguredFloatingToolbarAutoDim()},
+            {"floating_toolbar_auto_dim_opacity", GetConfiguredFloatingToolbarAutoDimOpacity()},
+            {"floating_toolbar_auto_dim_delay", GetConfiguredFloatingToolbarAutoDimDelay()},
             {"cn_en_mixed_input", GetConfiguredEnglishCandidatesEnabled()},
             {"candidate_translations", GetConfiguredCandidateTranslationsEnabled()},
             {"candidate_translation_show_pos", GetConfiguredCandidateTranslationShowPos()},
@@ -615,6 +620,8 @@ std::wstring BuildConfigMessage(bool refresh_skin_catalog)
             {"theme_handwriting", GetConfiguredThemeHandwriting()},
             {"theme_voice", GetConfiguredThemeVoice()},
             {"page_size", GetConfiguredCandidatePageSize()},
+            {"candidate_window_background_opacity", GetConfiguredCandidateWindowBackgroundOpacity()},
+            {"candidate_window_foreground_opacity", GetConfiguredCandidateWindowForegroundOpacity()},
             {"font", GetConfiguredCandidateFont()},
             {"font_css_family", ResolveSystemFontFamilyForCss(GetConfiguredCandidateFont())},
             {"fallback_fonts", GetConfiguredCandidateFallbackFonts()},
@@ -849,6 +856,10 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredCandidateAiBadgeStyle(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.page_size")
         return SetConfiguredCandidatePageSize(static_cast<int>(data.at("value").as_int64()));
+    if (path == "appearance.candidate_window_background_opacity")
+        return SetConfiguredCandidateWindowBackgroundOpacity(static_cast<int>(data.at("value").as_int64()));
+    if (path == "appearance.candidate_window_foreground_opacity")
+        return SetConfiguredCandidateWindowForegroundOpacity(static_cast<int>(data.at("value").as_int64()));
     if (path == "appearance.font")
         return SetConfiguredCandidateFont(json::value_to<std::string>(data.at("value")));
     if (path == "appearance.fallback_fonts")
@@ -911,6 +922,16 @@ bool ApplyConfigUpdate(const json::object &data)
         return SetConfiguredFloatingToolbarAutoHideDelay(static_cast<int>(data.at("value").as_int64()));
     if (path == "general.floating_toolbar_shadow")
         return SetConfiguredFloatingToolbarShadow(json::value_to<bool>(data.at("value")));
+    if (path == "general.floating_toolbar_background_opacity")
+        return SetConfiguredFloatingToolbarBackgroundOpacity(static_cast<int>(data.at("value").as_int64()));
+    if (path == "general.floating_toolbar_foreground_opacity")
+        return SetConfiguredFloatingToolbarForegroundOpacity(static_cast<int>(data.at("value").as_int64()));
+    if (path == "general.floating_toolbar_auto_dim")
+        return SetConfiguredFloatingToolbarAutoDim(json::value_to<bool>(data.at("value")));
+    if (path == "general.floating_toolbar_auto_dim_opacity")
+        return SetConfiguredFloatingToolbarAutoDimOpacity(static_cast<int>(data.at("value").as_int64()));
+    if (path == "general.floating_toolbar_auto_dim_delay")
+        return SetConfiguredFloatingToolbarAutoDimDelay(static_cast<int>(data.at("value").as_int64()));
     constexpr std::string_view toolbar_prefix = "general.floating_toolbar_";
     if (path.rfind(toolbar_prefix, 0) == 0)
         return SetConfiguredFloatingToolbarItemEnabled(path.substr(toolbar_prefix.size()),
