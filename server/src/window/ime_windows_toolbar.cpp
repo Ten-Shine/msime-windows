@@ -214,9 +214,10 @@ void PlaceFloatingToolbarOnScreen(HWND hwnd)
 }
 
 // Auto-hide / auto-dim state. All of it lives on the UI thread, like the
-// applies. g_ftb_auto_hidden survives focus changes and config syncs on
-// purpose: only a toolbar-visible input state change or a settings change
-// brings the toolbar back, otherwise every focus switch would re-show it.
+// applies. g_ftb_auto_hidden survives focus changes on purpose: only a
+// toolbar-visible input state change — including a terminal activation, i.e.
+// the user switching back to this input method — or a settings change brings
+// the toolbar back, otherwise every focus switch would re-show it.
 bool g_ftb_auto_hidden = false;
 bool g_ftb_auto_hide_armed = false;
 // At most one fade runs at a time. The kind decides what "finished" means:

@@ -130,8 +130,20 @@ LRESULT CALLBACK WndProcCandWindow(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
     if (message == WM_IMEACTIVATE)
     {
+        // 终态激活本身就是一次状态变化：用户刚切回水杉——同一个窗口里换输入法，
+        // 或者换到另一个用着水杉的应用窗口。自动隐藏的工具栏因此要重新显示一次，
+        // 与切换中英、全半角这些状态变化同等对待。没有经过停活的重复激活（路由
+        // 恢复、配置同步）不是状态变化，保持原样，否则每次焦点切换都会把它弹回来。
+        const bool became_active = !g_is_ime_active;
         g_is_ime_active = true;
-        ApplyConfiguredFloatingToolbarVisibility(L"wm-imeactivate");
+        if (became_active)
+        {
+            RestartFloatingToolbarAutoHide(L"ime-activated");
+        }
+        else
+        {
+            ApplyConfiguredFloatingToolbarVisibility(L"wm-imeactivate");
+        }
         return 0;
     }
 
