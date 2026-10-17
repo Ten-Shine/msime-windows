@@ -1229,6 +1229,9 @@ void CandidatePresenter::Present()
     }
     if (backdropActive_ && impl_->card)
     {
+        // 淡出时整帧图层只压 D2D 内容；材质是合成层的独立 visual，不跟着压就会在内容
+        // 淡完之后还留在屏幕上，直到 Hide() 把宿主 cloak 才整块消失。让它按同一比例淡。
+        impl_->resources.SetBackdropOpacity(frameOpacity_);
         // 和这一帧的内容同一次提交，卡片怎么伸缩毛玻璃都贴着它。
         impl_->resources.SetBackdrop(impl_->card->GetBounds(), backdropRadiusDip_);
     }
