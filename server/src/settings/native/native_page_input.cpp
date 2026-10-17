@@ -1840,22 +1840,6 @@ VisualPtr BuildInputPage(PageContext &context)
         s->translationsToggle = master;
     }
 
-    // ---- 译文快捷键 ----
-    // 三个 chord 各绑一个 general.* 配置键：Ctrl+Enter 上屏高亮候选的译文，Ctrl+数字 / Shift+数字
-    // 上屏指定序号候选的译文；前两个默认开启，Shift+数字默认关闭。和「显示词性」一样挂在总开关下，
-    // candidate_translations 关掉时整节置灰并停用。
-    {
-        auto shortcuts = std::make_shared<Dimmable>(
-            Col({MakeTitleBlock(
-                     L"译文快捷键",
-                     L"用快捷键上屏候选的译文：Ctrl+Enter 上屏高亮那条，Ctrl+数字 / Shift+数字 上屏指定序号那条"),
-                 OptionList({BindCheck(context, L"Ctrl+Enter", "general.candidate_translation_ctrl_enter"),
-                             BindCheck(context, L"Ctrl+数字", "general.candidate_translation_ctrl_digit"),
-                             BindCheck(context, L"Shift+数字", "general.candidate_translation_shift_digit")})}));
-        s->translationInputs.push_back(shortcuts);
-        page.AddSection(shortcuts);
-    }
-
     // ---- 以词定字 ----
     {
         s->wordKeysBrackets = PaddedRadio(s->wordKeys->Add(L"[ / ]", "brackets"));

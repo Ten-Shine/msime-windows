@@ -886,12 +886,6 @@ bool CCompositionProcessorEngine::IsVModeShiftDigitSelectionKey(UINT uCode, cons
 {
     const bool shift_only = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0 &&
                             (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0 && (GetAsyncKeyState(VK_MENU) & 0x8000) == 0;
-    return IsVModeShiftDigitSelectionKey(uCode, buffer, length, shift_only);
-}
-
-bool CCompositionProcessorEngine::IsVModeShiftDigitSelectionKey(UINT uCode, const WCHAR *buffer, DWORD_PTR length,
-                                                                bool shift_only)
-{
     return shift_only && uCode >= L'1' && uCode <= L'9' &&
            FanyImeVModeInput::IsComposition(buffer, static_cast<std::size_t>(length),
                                             Global::VModeTrigger.load(std::memory_order_relaxed));

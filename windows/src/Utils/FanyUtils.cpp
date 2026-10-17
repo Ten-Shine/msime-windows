@@ -556,10 +556,10 @@ SwitchLanguageHotkeys ReadConfiguredSwitchLanguageHotkeys()
     return result;
 }
 
-// Same one-second stamp cache as the hotkeys above: the key sink asks for this on every digit
-// chord while the settings page writes the file underneath it. Constant-initialized, so the
-// local statics carry no guard variable and no destructor even with /Zc:threadSafeInit-.
-CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
+// Same one-second stamp cache as the hotkeys above: the key sink asks for this on every
+// translation chord while the settings page writes the file underneath it. Constant-initialized,
+// so the local statics carry no guard variable and no destructor even with /Zc:threadSafeInit-.
+bool ReadConfiguredCandidateTranslationsEnabled()
 {
     struct Cache
     {
@@ -569,7 +569,7 @@ CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
         DWORD sizeHigh = 0;
         bool checked = false;
         bool haveStamp = false;
-        CandidateTranslationShortcuts value;
+        bool value = false;
     };
     static Cache cache;
     static SRWLOCK lock = SRWLOCK_INIT;
@@ -585,7 +585,7 @@ CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
             WIN32_FILE_ATTRIBUTE_DATA attributes{};
             if (path.empty() || !GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes))
             {
-                cache.value = CandidateTranslationShortcuts{};
+                cache.value = false;
                 cache.haveStamp = false;
             }
             else if (!cache.haveStamp || CompareFileTime(&attributes.ftLastWriteTime, &cache.lastWrite) != 0 ||
@@ -595,7 +595,7 @@ CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
                 cache.lastWrite = attributes.ftLastWriteTime;
                 cache.sizeLow = attributes.nFileSizeLow;
                 cache.sizeHigh = attributes.nFileSizeHigh;
-                CandidateTranslationShortcuts parsed;
+                bool parsed = false;
                 std::ifstream input(path, std::ios::binary);
                 if (!input)
                 {
@@ -635,19 +635,7 @@ CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
                         const std::string raw = line.substr(eq + 1);
                         if (key == "candidate_translations")
                         {
-                            parsed.translations = ParseTomlBool(raw, false);
-                        }
-                        else if (key == "candidate_translation_ctrl_enter")
-                        {
-                            parsed.ctrl_enter = ParseTomlBool(raw, true);
-                        }
-                        else if (key == "candidate_translation_ctrl_digit")
-                        {
-                            parsed.ctrl_digit = ParseTomlBool(raw, true);
-                        }
-                        else if (key == "candidate_translation_shift_digit")
-                        {
-                            parsed.shift_digit = ParseTomlBool(raw, false);
+                            parsed = ParseTomlBool(raw, false);
                         }
                     }
                     cache.value = parsed;
@@ -656,11 +644,11 @@ CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts()
         }
         catch (...)
         {
-            cache.value = CandidateTranslationShortcuts{};
+            cache.value = false;
             cache.haveStamp = false;
         }
     }
-    const CandidateTranslationShortcuts result = cache.value;
+    const bool result = cache.value;
     ReleaseSRWLockExclusive(&lock);
     return result;
 }

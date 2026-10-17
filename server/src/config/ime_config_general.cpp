@@ -102,44 +102,6 @@ bool SetConfiguredCandidateTranslationShowPos(bool show)
     if (!WriteConfiguredValue("general", "candidate_translation_show_pos", show ? "true" : "false"))
         return false;
     g_candidate_translation_show_pos.store(show, std::memory_order_relaxed);
-}
-
-bool GetConfiguredCandidateTranslationCtrlEnterEnabled()
-{
-    return g_candidate_translation_ctrl_enter_enabled;
-}
-
-bool SetConfiguredCandidateTranslationCtrlEnterEnabled(bool enabled)
-{
-    if (!WriteConfiguredValue("general", "candidate_translation_ctrl_enter", enabled ? "true" : "false"))
-        return false;
-    g_candidate_translation_ctrl_enter_enabled = enabled;
-    return true;
-}
-
-bool GetConfiguredCandidateTranslationCtrlDigitEnabled()
-{
-    return g_candidate_translation_ctrl_digit_enabled;
-}
-
-bool SetConfiguredCandidateTranslationCtrlDigitEnabled(bool enabled)
-{
-    if (!WriteConfiguredValue("general", "candidate_translation_ctrl_digit", enabled ? "true" : "false"))
-        return false;
-    g_candidate_translation_ctrl_digit_enabled = enabled;
-    return true;
-}
-
-bool GetConfiguredCandidateTranslationShiftDigitEnabled()
-{
-    return g_candidate_translation_shift_digit_enabled;
-}
-
-bool SetConfiguredCandidateTranslationShiftDigitEnabled(bool enabled)
-{
-    if (!WriteConfiguredValue("general", "candidate_translation_shift_digit", enabled ? "true" : "false"))
-        return false;
-    g_candidate_translation_shift_digit_enabled = enabled;
     return true;
 }
 

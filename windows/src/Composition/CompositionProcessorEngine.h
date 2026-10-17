@@ -64,10 +64,6 @@ class CCompositionProcessorEngine
     // V 模式里数字键用来输入，选词改用 Shift+数字。放在 IsVModeInputKey 之后判断：Shift+8/9
     // 打出的 * ( 在那里已经当编码键收下了。
     static bool IsVModeShiftDigitSelectionKey(UINT uCode, _In_reads_opt_(length) const WCHAR *buffer, DWORD_PTR length);
-    // 同上，但「是否只有 Shift」由调用方给定：延迟分类判的是排队那一刻捕获的修饰键，等它真正
-    // 执行时物理键早已松开，用 GetAsyncKeyState 现场读会读成「没按 Shift」。
-    static bool IsVModeShiftDigitSelectionKey(UINT uCode, _In_reads_opt_(length) const WCHAR *buffer, DWORD_PTR length,
-                                              bool shift_only);
     // 当句中辅助码触发键的分号在缓冲里记成反引号（与 Server 的 raw 一致），其余字符原样返回。
     static WCHAR NormalizeMidSentenceHelpcodeTrigger(WCHAR wch, _In_reads_opt_(length) const WCHAR *buffer,
                                                      DWORD_PTR length, DWORD_PTR caret);

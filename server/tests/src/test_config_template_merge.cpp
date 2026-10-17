@@ -150,60 +150,6 @@ TEST_CASE(shipped_translation_pos_defaults_and_upgrade_preserve_user_choice)
     }
 }
 
-TEST_CASE(shipped_translation_shortcut_defaults_and_upgrade_preserve_user_choice)
-{
-    std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);
-    REQUIRE(static_cast<bool>(input));
-    const std::string installed((std::istreambuf_iterator<char>(input)), {});
-    const auto working_path =
-        std::filesystem::path(MSIME_DEFAULT_CONFIG_PATH).parent_path().parent_path().parent_path() /
-        "server/assets/config/config.toml";
-    std::ifstream development(working_path, std::ios::binary);
-    REQUIRE(static_cast<bool>(development));
-    const std::string working((std::istreambuf_iterator<char>(development)), {});
-
-    // Ctrl+Enter 与 Ctrl+数字 是输入法自己的 chord，出厂开启；Shift+数字 出厂关闭，把上档符号
-    // 还给宿主。
-    for (const std::string &text : {installed, working})
-    {
-        const auto shipped = toml::parse(text);
-        REQUIRE(shipped["general"]["candidate_translation_ctrl_enter"].value_or(false));
-        REQUIRE(shipped["general"]["candidate_translation_ctrl_digit"].value_or(false));
-        REQUIRE(!shipped["general"]["candidate_translation_shift_digit"].value_or(true));
-    }
-
-    // 还没有这三个键的旧配置：升级时由模板补上出厂值。模板里漏掉它们，值就会被静默丢弃。
-    const std::string old_template = "[general]\ncandidate_translations = true\n";
-    const auto upgraded = toml::parse(MergeConfigIntoTemplate(installed, old_template, old_template));
-    REQUIRE(upgraded["general"]["candidate_translation_ctrl_enter"].value_or(false));
-    REQUIRE(upgraded["general"]["candidate_translation_ctrl_digit"].value_or(false));
-    REQUIRE(!upgraded["general"]["candidate_translation_shift_digit"].value_or(true));
-
-    for (const bool ctrl_enter : {false, true})
-    {
-        for (const bool ctrl_digit : {false, true})
-        {
-            for (const bool shift_digit : {false, true})
-            {
-                const std::string configured =
-                    old_template + "candidate_translation_ctrl_enter = " + (ctrl_enter ? "true\n" : "false\n") +
-                    "candidate_translation_ctrl_digit = " + (ctrl_digit ? "true\n" : "false\n") +
-                    "candidate_translation_shift_digit = " + (shift_digit ? "true\n" : "false\n");
-                for (const auto &baseline : {std::string(), old_template, installed})
-                {
-                    const auto preserved = toml::parse(MergeConfigIntoTemplate(installed, configured, baseline));
-                    REQUIRE_EQ(preserved["general"]["candidate_translation_ctrl_enter"].value_or(!ctrl_enter),
-                               ctrl_enter);
-                    REQUIRE_EQ(preserved["general"]["candidate_translation_ctrl_digit"].value_or(!ctrl_digit),
-                               ctrl_digit);
-                    REQUIRE_EQ(preserved["general"]["candidate_translation_shift_digit"].value_or(!shift_digit),
-                               shift_digit);
-                }
-            }
-        }
-    }
-}
-
 TEST_CASE(shipped_english_first_page_count_defaults_and_upgrade_preserve_user_choice)
 {
     std::ifstream input(MSIME_DEFAULT_CONFIG_PATH, std::ios::binary);

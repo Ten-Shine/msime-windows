@@ -50,18 +50,8 @@ struct LanguageBarVisibility
 // Read language_bar.enabled / show_ime_mode / show_double_single_byte / show_punctuation.
 LanguageBarVisibility ReadConfiguredLanguageBarVisibility();
 
-// Whether the translation shortcuts are enabled: Ctrl+Enter (default on) commits the translation
-// of the highlighted candidate, Ctrl+digit (default on) and Shift+digit (default off) the one at
-// that page position. `translations` is the master switch they all hang off: with the glosses
+// Whether the candidate glosses are on (general.candidate_translations). The two translation
+// chords, Ctrl+Enter and Ctrl+1..9, hang off it and are otherwise always on: with the glosses
 // turned off there is nothing to commit, so the chords must not be taken from the host either.
-struct CandidateTranslationShortcuts
-{
-    bool translations = false;
-    bool ctrl_enter = true;
-    bool ctrl_digit = true;
-    bool shift_digit = false;
-};
-// Read general.candidate_translations / candidate_translation_ctrl_enter /
-// candidate_translation_ctrl_digit / candidate_translation_shift_digit from shared config.toml.
-CandidateTranslationShortcuts ReadConfiguredCandidateTranslationShortcuts();
+bool ReadConfiguredCandidateTranslationsEnabled();
 } // namespace FanyUtils

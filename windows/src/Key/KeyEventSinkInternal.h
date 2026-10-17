@@ -16,12 +16,9 @@ namespace key_event_sink_detail
 KEYSTROKE_FUNCTION SegmentEditFunction(UINT code, UINT modifiers);
 UINT CaptureIpcModifiers();
 bool IsEnglishInputModeToggle(UINT code, UINT modifiers);
-// Ctrl+Enter on a candidate: the chord plus the config switches it hangs off.
+// Ctrl+Enter / Ctrl+1..9 on a candidate: the chords plus the gloss switch they hang off.
 bool IsTranslationCommitShortcut(UINT code, UINT modifiers);
-// Whether the running input mode already binds Shift+1..9 to "select the candidate at that
-// page position"; see IsConfiguredTranslationDigitShortcut for why that chord stands down there.
-bool IsShiftDigitOwnedByInputMode(UINT code, bool v_mode_shift_digit_selection);
-bool IsConfiguredTranslationDigitShortcut(UINT code, UINT modifiers, bool shift_digit_selects_candidate);
+bool IsTranslationDigitShortcut(UINT code, UINT modifiers);
 bool IsPinyinCommitShortcut(UINT code, UINT modifiers);
 bool IsCharacterSetInputModeToggle(UINT code, UINT modifiers);
 bool IsTrilingualCycleEnabled();
