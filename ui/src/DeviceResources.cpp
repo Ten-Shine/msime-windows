@@ -768,6 +768,15 @@ void DeviceResources::SetBackdropMaterial(const BackdropMaterial &material)
     }
 }
 
+void DeviceResources::SetBackdropOpacity(float opacity)
+{
+    if (!surface_ || !surface_->backdrop)
+    {
+        return;
+    }
+    surface_->backdrop->put_Opacity((std::clamp)(opacity, 0.0f, 1.0f));
+}
+
 bool DeviceResources::ApplyBackdropMaterial()
 {
     using Microsoft::WRL::ComPtr;

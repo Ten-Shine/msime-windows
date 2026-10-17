@@ -103,6 +103,11 @@ class DeviceResources
     // Material of the backdrop; kept across surface recreation. The default, both opacities
     // 0, shows the blurred source as it is.
     void SetBackdropMaterial(const BackdropMaterial &material);
+    // Opacity of the whole backdrop (blur, brightness and tint together). A D2D layer over the
+    // content cannot reach the backdrop: it is a separate compositor visual, so a frame fade
+    // that only lowers the layer leaves the material at full strength. Scale it here as well.
+    // Ignored outside backdrop composition.
+    void SetBackdropOpacity(float opacity);
     // Opens and closes a frame on the current target. In backdrop composition the device
     // context only exists between the two, so fetch GetRenderTarget() after BeginDraw.
     // EndDraw returns D2DERR_RECREATE_TARGET when the device has to be recreated.
