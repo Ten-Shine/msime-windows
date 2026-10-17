@@ -414,6 +414,33 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
             pIME->_DispatchPendingCommitReplyPolls();
             break;
         }
+        if (wParam == TIMER_FOREGROUND_INPUT_METHOD_CHECK)
+        {
+            const ULONGLONG started = pIME->_foregroundInputMethodCheckStarted;
+            if (!Global::g_connected || !pIME->_IsOwnThreadTheActiveInputMethod() ||
+                pIME->_focusLostToWindowsTextInputHost || started == 0)
+            {
+                pIME->_CancelForegroundInputMethodCheck();
+                break;
+            }
+
+            // Rechecking the foreground is for confirming a hide, never for
+            // claiming: an answer of "this input method" only means the switch
+            // has not landed yet, and showing is the focus callbacks' job. That
+            // keeps this timer from ever putting the toolbar back on screen.
+            if (pIME->_EndToolbarClaimForForeignForegroundWindow(L"foreground-probe"))
+            {
+                break;
+            }
+
+            // Thread-focus-only hosts need a bounded retry when no document-focus
+            // deferral was armed. The normal 300 ms timer remains the final fallback.
+            if (!pIME->_focusLossDeferPending && GetTickCount64() - started >= FOREGROUND_INPUT_METHOD_CHECK_MAX_MS)
+            {
+                pIME->_CancelForegroundInputMethodCheck();
+            }
+            break;
+        }
         if (wParam == TIMER_DEFERRED_FOCUS_LOSS)
         {
             KillTimer(hWnd, TIMER_DEFERRED_FOCUS_LOSS);
@@ -423,6 +450,16 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
                 // The document focus did not return within the deferral
                 // window, so this is a real focus loss (app switch), not a
                 // transient in-app route change (Excel cell-edit entry).
+                // The foreground window has settled by now: if it belongs to
+                // a thread whose active input method is not ours, hide the
+                // toolbar with a terminal deactivation first. The suspension
+                // below deliberately keeps the toolbar visible, so without
+                // this the switch to another input method's window would
+                // leave it up.
+                (void)pIME->_EndToolbarClaimForForeignForegroundWindow(L"deferred-focus-loss");
+                // This decision is final: the deferral is over, so stop
+                // rechecking the foreground either way.
+                pIME->_CancelForegroundInputMethodCheck();
                 MarkNamedpipeFocusLost();
                 Global::g_connected = false;
                 PostMessage(hWnd, WM_DisconnectNamedpipe, 0, 0);
@@ -438,7 +475,14 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         if (wParam == TIMER_FOCUS_STATUS_RESEND)
         {
             KillTimer(hWnd, TIMER_FOCUS_STATUS_RESEND);
-            SendCurrentImeStatusSnapshot(pIME, true);
+            // Restating ownership is only legitimate while this thread's
+            // active input method is this text service and this thread still
+            // owns the input focus: a thread that uses another input method —
+            // or that already lost focus to another input method's window,
+            // which is what a per-app-window switch does — must not re-route
+            // the toolbar to itself.
+            SendCurrentImeStatusSnapshot(pIME,
+                                         pIME->_IsOwnThreadTheActiveInputMethod() && pIME->_ThreadOwnsInputFocus());
             break;
         }
         if (wParam == TIMER_PAIRED_PUNCTUATION_CARET)
@@ -517,26 +561,72 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
         // changes. Refresh this thread's cached TSF language-bar item even when
         // there was no document-focus transition.
         pIME->_RefreshLanguageBarThemeIcons();
-        if (!IsNamedpipeFocusStateOwner(pIME) || !IsNamedpipeThreadFocused())
+        if (!IsNamedpipeFocusStateOwner(pIME))
         {
             break;
         }
-        ITfDocumentMgr *document = nullptr;
-        if (SUCCEEDED(pIME->_GetThreadMgr()->GetFocus(&document)) && document)
+        // This notification is posted, so it can be queued before a window
+        // switch and dispatched after this instance already hid the toolbar for
+        // the window the user moved to. Acting on it alone is what flashed the
+        // toolbar back on screen: the foreground window says which input method
+        // the user is looking at, and the thread focus says whether this
+        // instance still owns the claim, so both are asked before the toolbar
+        // is touched.
+        switch (pIME->_DecideToolbarVisibilityForForegroundWindow(L"thread-focus"))
         {
-            document->Release();
-            // A background document notification may precede thread focus,
-            // and no second document notification is guaranteed on return.
-            if (!Global::g_connected || pIME->_focusLostToWindowsTextInputHost)
+        case ToolbarVisibilityDecision::Hide:
+            (void)pIME->_EndToolbarClaimForForeignForegroundWindow(L"thread-focus");
+            break;
+        case ToolbarVisibilityDecision::Claim:
+            if (!pIME->_ThreadOwnsInputFocus())
             {
+                // This notification was queued before the user left: the thread
+                // no longer owns the input focus, so OnKillThreadFocus already
+                // ended the claim and this is the stale half of the flash.
+                // Refresh the Server's view without taking the toolbar back.
+                SendCurrentImeStatusSnapshot(pIME);
+                break;
+            }
+            if (!Global::g_connected)
+            {
+                // Thread focus returned after the toolbar was hidden for a
+                // window that uses another input method. Re-run the explicit
+                // activation handshake — the same path OnSetFocus takes when a
+                // document focus session restarts — so the Server shows the
+                // toolbar again. A background document notification may precede
+                // thread focus and no second document notification is guaranteed
+                // on return, so the claim cannot wait for one.
                 pIME->_ClearSmartPunctuationAction();
                 Global::g_connected = true;
+                pIME->_workerCommitReady.store(false, std::memory_order_release);
                 RequireNamedpipeFocusActivation();
                 pIME->_focusLostToWindowsTextInputHost = false;
+                PostMessage(hWnd, WM_ConnectNamedpipe, 0, 0);
             }
-            PostMessage(hWnd, WM_IpcReconnect, 0, 0);
+            else if (!pIME->_focusLostToWindowsTextInputHost)
+            {
+                // This thread is the input method the user is looking at, so
+                // claim the toolbar back: FocusRestored is an implicit
+                // activation and moves the route here even when another client
+                // took it while focus was away (including the route this thread
+                // itself retired on the way out). The helper drops the claim
+                // unless the thread still owns focus by the time it runs.
+                SendCurrentImeStatusSnapshot(pIME, true);
+            }
+            else
+            {
+                SendCurrentImeStatusSnapshot(pIME);
+            }
+            break;
+        case ToolbarVisibilityDecision::Keep:
+        default:
+            // The foreground window names no input method (the secure desktop,
+            // the Win+. panel) or this thread's active input method is another
+            // one: refresh the Server's view without moving the toolbar or
+            // changing its owner.
+            SendCurrentImeStatusSnapshot(pIME);
+            break;
         }
-        SendCurrentImeStatusSnapshot(pIME);
         break;
     }
     case WM_DrainDeferredKeyDown: {

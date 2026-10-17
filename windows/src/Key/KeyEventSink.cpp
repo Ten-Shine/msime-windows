@@ -770,7 +770,18 @@ STDAPI CMetasequoiaIME::OnSetFocus(BOOL fForeground)
     // Activation can precede keystroke focus (Notepad TIP reload). TSF need
     // not send another document-focus callback before delivering keys. A
     // background thread waits for WM_ThreadFocus instead.
-    if (ShouldRecoverNamedpipeOnKeyFocus(fForeground != FALSE, IsNamedpipeThreadFocused(), Global::g_connected,
+    //
+    // Recovering the session also re-routes the floating toolbar here, so the
+    // claim needs one condition more than the thread-focus test inside the
+    // helper: this thread's active input method must be this text service. The
+    // profile alone is not enough — a per-app window switch to another input
+    // method never changes it — while a stale keystroke focus callback from a
+    // host tearing its own window down is dispatched after OnKillThreadFocus
+    // already ended the claim. This path deliberately does not query the
+    // foreground window: the OpenProcess behind the Win+. check would be paid
+    // on every keystroke focus, and being blocked here drops the first key.
+    if (_IsOwnThreadTheActiveInputMethod() &&
+        ShouldRecoverNamedpipeOnKeyFocus(fForeground != FALSE, IsNamedpipeThreadFocused(), Global::g_connected,
                                          IsNamedpipeFocusStateOwner(this)))
     {
         Global::g_connected = true;

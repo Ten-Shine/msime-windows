@@ -4,6 +4,7 @@
 #include "MetasequoiaIMEBaseStructure.h"
 #include "Ipc.h"
 #include "DeferredKeyFailurePolicy.h"
+#include "ToolbarVisibilityPolicy.h"
 #include "char_classify.h"
 #include <atomic>
 #include <chrono>
@@ -150,7 +151,10 @@ constexpr UINT_PTR TIMER_FOCUS_CARET_STATE = 7;
 // below WM_PAINT, so with a timer the host repaints between slices.
 // The id must not collide with the constants above.
 constexpr UINT_PTR TIMER_COMMIT_REPLY_POLL = 8;
+constexpr UINT_PTR TIMER_FOREGROUND_INPUT_METHOD_CHECK = 9;
 constexpr UINT COMMIT_REPLY_POLL_INTERVAL_MS = 1;
+constexpr UINT FOREGROUND_INPUT_METHOD_CHECK_INTERVAL_MS = 15;
+constexpr ULONGLONG FOREGROUND_INPUT_METHOD_CHECK_MAX_MS = 600;
 // Runs after the focus status resend and the reconnect it may trigger, so the
 // Server has activated this client before the badge request arrives.
 constexpr UINT FOCUS_CARET_STATE_DELAY_MS = 120;
@@ -595,6 +599,40 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     void _ArmEmptyDeferredProjection();
     void _ReleaseIdleDeferredProjection();
     bool _CaptureWindowsTextInputHostFocusLoss();
+    // The window the user is looking at is the single authority for the
+    // floating toolbar, in both directions — hide for another input method,
+    // claim for ours, keep when the foreground cannot name one. Deciding the
+    // show separately from the hide is what flashed the toolbar on a window
+    // switch; see ToolbarVisibilityPolicy.h.
+    ToolbarVisibilityDecision _DecideToolbarVisibilityForForegroundWindow(const wchar_t *source,
+                                                                          bool logKeepDecision = true);
+    // True when the foreground window the user just moved to demonstrably runs
+    // another input method (the "different input method for each app window"
+    // setting). The floating toolbar follows the input method the user is
+    // looking at, exactly like Microsoft Pinyin: hide it for another input
+    // method, show it for ours. False also covers the secure desktop, the Win+.
+    // panel and a failed query, none of which is a verdict.
+    bool _ForegroundWindowRunsAnotherInputMethod(bool logKeepDecision = true);
+    // True when the foreground window runs this input method, so a focus
+    // callback may show the toolbar and keep it.
+    bool _ForegroundWindowUsesThisInputMethod();
+    // Ends this client's Server-side UI route while the foreground window runs
+    // another input method, keeping the TIP, its pipes and the profile alive for
+    // the trip back. Returns whether the toolbar was retired.
+    bool _EndToolbarClaimForForeignForegroundWindow(const wchar_t *source);
+    void _ScheduleForegroundInputMethodCheck();
+    void _CancelForegroundInputMethodCheck();
+    // True when this thread's active input processor profile is this text
+    // service. Only then may this instance claim or keep the floating
+    // toolbar: a thread whose profile switched elsewhere (per-app-window
+    // input method, or a manual switch) must neither show it nor restate
+    // another client's ownership.
+    bool _IsOwnThreadTheActiveInputMethod();
+    // True when this thread is the one the framework gives the input focus to.
+    // Claiming the toolbar requires it: a focus notification queued before the
+    // user left is dispatched after the claim was already ended, and that stale
+    // half is what flashed the toolbar back on screen.
+    bool _ThreadOwnsInputFocus();
     // Caret badge on moving focus into another text field: callbacks only
     // schedule; the timer announces once focus has settled.
     void _ScheduleFocusedInputModeAnnouncement();
@@ -946,7 +984,13 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     bool _focusResetPending;
     bool _activationRequired;
     bool _focusLostToWindowsTextInputHost;
+    // Whether this thread's active input processor profile is this text
+    // service. Tracked through ActivateEx / OnActivated / Deactivate; gates
+    // every toolbar claim so a window that uses another input method can
+    // never show or keep our toolbar.
+    bool _ownProfileActiveInThread = false;
     bool _focusLossDeferPending;
+    ULONGLONG _foregroundInputMethodCheckStarted = 0;
     // Focus window of the last editable document, and whether the last focus
     // callback landed on an editable document at all. Together they tell a
     // move to another field from Chromium swapping documents while typing.

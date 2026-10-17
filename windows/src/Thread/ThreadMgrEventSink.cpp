@@ -154,6 +154,11 @@ STDAPI CMetasequoiaIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDo
         _focusAnnouncementEditable = field.editable;
     }
 
+    if (pDocMgrFocus)
+    {
+        _CancelForegroundInputMethodCheck();
+    }
+
     if (pDocMgrFocus && _focusLossDeferPending)
     {
         // Focus returned within the deferral window: Excel (and other apps)
@@ -168,7 +173,24 @@ STDAPI CMetasequoiaIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDo
     // Document focus authorizes a new session only while this TSF thread owns
     // input focus. Background documents keep their bookkeeping below; the
     // thread-focus callback resumes their connection when they become active.
-    if (pDocMgrFocus && IsNamedpipeThreadFocused() && (!Global::g_connected || windowsTextInputHostTransition))
+    //
+    // bcaf34e used document focus as the authoritative reconnect boundary.
+    // The modern protocol preserves that behavior with a new activation epoch
+    // on the existing healthy transport; EnsureNamedpipeFocusSessionActivated
+    // physically reopens a channel as well when its health check fails.
+    // Restarting a session here also re-routes the floating toolbar to this
+    // client, so both halves of the claim are required: this thread has to own
+    // the input focus, and the window the user is looking at must not
+    // demonstrably run another input method. A host that re-establishes a
+    // document focus while it is being deactivated satisfies neither, and
+    // claiming there is what brought the toolbar back for a window the user had
+    // already left — the next focus loss then flashed it away again.
+    //
+    // The "needs a restart at all" test comes first: this callback runs on
+    // every edit, and a healthy session must not pay a foreground query (plus
+    // the OpenProcess behind the Win+. check) on each one.
+    if (pDocMgrFocus && (!Global::g_connected || windowsTextInputHostTransition) && IsNamedpipeThreadFocused() &&
+        _IsOwnThreadTheActiveInputMethod() && !_ForegroundWindowRunsAnotherInputMethod(false))
     {
         // A genuine focus-session handover starts here: the activation token
         // that the pending smart-punctuation action was armed under is about
@@ -193,6 +215,10 @@ STDAPI CMetasequoiaIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDo
             // performs the normal MarkNamedpipeFocusLost + disconnect.
             _focusLossDeferPending = true;
             SetTimer(_msgWndHandle, TIMER_DEFERRED_FOCUS_LOSS, FOCUS_LOSS_DEFER_MS, nullptr);
+        }
+        if (!windowsTextInputHostTransition)
+        {
+            _ScheduleForegroundInputMethodCheck();
         }
     }
 
