@@ -36,8 +36,10 @@ void ApplyConfiguredFloatingToolbarVisibility(const wchar_t *reason = L"unspecif
 // Use instead of ShowWindow(SW_HIDE) on the toolbar host: a toolbar whose
 // presenter never came up is only cloaked, never hidden.
 void HideFloatingToolbarHost();
-// Auto-hide settings (or the toolbar switch) changed: drop any auto-hidden or
-// mid-fade state, re-apply visibility and start the countdown from scratch.
+// A toolbar-visible state change that must bring the toolbar back unconditionally:
+// a settings change, or a terminal activation (the user switched back to this
+// input method). Drops any auto-hidden or mid-fade state, re-applies visibility
+// and starts the countdown from scratch.
 void RestartFloatingToolbarAutoHide(const wchar_t *reason);
 // An input state shown on the toolbar (CN/EN, width, punctuation, Caps Lock...)
 // changed: bring an auto-hidden toolbar back and restart its countdown.
