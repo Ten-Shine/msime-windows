@@ -443,14 +443,40 @@ bool CMetasequoiaIME::_ClassifyDeferredKeyDown(_In_ ITfContext *pContext, WPARAM
         return true;
     }
 
-    // 同上：译文上屏也要在这条 Ctrl/Alt 拦截之前分类，否则这颗键会被交还给应用。
+    // 同上：译文上屏（Ctrl+Enter 高亮那条、Ctrl/Shift+数字指定序号那条）也要在这条 Ctrl/Alt
+    // 拦截之前分类，否则这颗键会被交还给应用。
     const bool projectedCandidateActive =
         _deferredKeyProjectionValid ? _deferredProjectedCandidateActive : (_candidateMode == CANDIDATE_ORIGINAL);
     const bool projectedInputActive = _deferredKeyProjectionValid
                                           ? _deferredProjectedInputLength > 0
                                           : _pCompositionProcessorEngine->GetVirtualKeyLength() > 0;
+
+    // 与同步路径同一条规则：V 模式要用 Shift+数字选词时，译文快捷键让行。有投影时按投影的缓冲判，
+    // 排队的那颗键才算进它真正会落进去的那段组合。
+    //
+    // 「是否只有 Shift」取排队时捕获的 capturedModifiers，不现场读 GetAsyncKeyState：等它执行时
+    // 用户通常已经松开 Shift，读出来是「不是 Shift+数字」，这颗键又会被交回译文快捷键，两侧分叉。
+    const WCHAR *projectedBufferData = nullptr;
+    DWORD_PTR projectedBufferLength = 0;
+    if (_deferredKeyProjectionValid)
+    {
+        projectedBufferData = _deferredProjectedRawInput.c_str();
+        projectedBufferLength = _deferredProjectedRawInput.size();
+    }
+    else if (_pCompositionProcessorEngine != nullptr)
+    {
+        const CStringRange &buffer = _pCompositionProcessorEngine->GetKeystrokeBuffer();
+        projectedBufferData = buffer.Get();
+        projectedBufferLength = buffer.GetLength();
+    }
+    const bool capturedShiftOnly = (capturedModifiers & 0b00000111u) == 0b00000001u;
+    const bool projectedShiftDigitSelects = IsShiftDigitOwnedByInputMode(
+        *classifiedCode, CCompositionProcessorEngine::IsVModeShiftDigitSelectionKey(
+                             *classifiedCode, projectedBufferData, projectedBufferLength, capturedShiftOnly));
     if (projectedImeOpen && !_IsKeyboardDisabled() &&
-        ((projectedCandidateActive && IsTranslationCommitShortcut(*classifiedCode, capturedModifiers)) ||
+        ((projectedCandidateActive &&
+          (IsTranslationCommitShortcut(*classifiedCode, capturedModifiers) ||
+           IsConfiguredTranslationDigitShortcut(*classifiedCode, capturedModifiers, projectedShiftDigitSelects))) ||
          (!_serverUnavailableFallbackActive && projectedInputActive &&
           IsPinyinCommitShortcut(*classifiedCode, capturedModifiers))))
     {

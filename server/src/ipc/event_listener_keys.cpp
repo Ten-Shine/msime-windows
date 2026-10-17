@@ -654,27 +654,35 @@ void RebuildDateTimeCandidatePage()
     RefreshCandidatePageUi(true);
 }
 
-// Ctrl+Enter：上屏高亮候选右边的那条译文（副候选）。只有一条译义就直接上屏；有多条时把
-// 候选框整个换成这几条译义，空格/数字键照常选一条上屏（见 ProcessSelectionKey 的译文分支）。
-void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id)
+// Ctrl+Enter：上屏高亮候选右边的那条译文（副候选）。Ctrl+数字：上屏指定序号候选的那条译文
+// （forced_index_in_page，0 起）。只有一条译义就直接上屏；有多条时把候选框整个换成这几条
+// 译义，空格/数字键照常选一条上屏（见 ProcessSelectionKey 的译文分支）。
+void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, uint64_t request_id,
+                                int forced_index_in_page)
 {
     // 拿不到译文时回 NavigationIgnored：这颗键已经被 TSF 吃掉了，必须给一条回复，
     // 而且这条回复既不上屏也不给 wch 补标点。
     Global::MsgTypeToTsf = Global::DataFromServerMsgType::NavigationIgnored;
     const bool japanese = g_inputSession && g_inputSession->current_scheme_type() == SchemeType::JapaneseRomaji;
+    // Ctrl+Enter 的那条调用（forced_index_in_page < 0）还要看它自己的开关：数字键的那条在调用点
+    // 已经按各自的开关筛过。这里仍然要给 NavigationIgnored 而不是放行——Ctrl+Enter 落进普通处理
+    // 会直接上屏组合串，那比什么都不做更糟。
+    const bool shortcut_disabled = forced_index_in_page < 0 && !GetConfiguredCandidateTranslationCtrlEnterEnabled();
     if (IsCandidateSubPageActive() || IsUiLessMode() || japanese || !GetConfiguredCandidateTranslationsEnabled() ||
-        Global::candidate_ui.items.empty())
+        shortcut_disabled || Global::candidate_ui.items.empty())
     {
         SendCurrentDataToClient(client_id, activation_epoch, request_id);
         return;
     }
 
     // 和数字/空格选词一样，先等画面追上已发布的那一页，否则取到的是用户没看见的那条译文。
-    WaitForCandidateRenderSync(VK_RETURN);
+    WaitForCandidateRenderSync(Global::Keycode);
     EnsureCandidatePageReady();
 
     auto &ui = Global::candidate_ui;
-    const size_t index = static_cast<size_t>((std::max)(0, ui.selected_index_in_page));
+    const int highlighted_position = (std::max)(0, ui.selected_index_in_page);
+    const int page_position = forced_index_in_page >= 0 ? forced_index_in_page : highlighted_position;
+    const size_t index = static_cast<size_t>(page_position);
     if (index >= ui.page_glosses.size())
     {
         SendCurrentDataToClient(client_id, activation_epoch, request_id);
@@ -955,6 +963,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     // TSF classifies VK_NUMPAD0..9 as candidate digit keys. Keep the IPC
     // contract symmetric before any selection/composition predicates run.
+    // Keep the pre-normalization code as well: the V-mode exemption below is
+    // main-row only, exactly like the TSF's IsShiftDigitOwnedByInputMode, and
+    // the numpad twins are indistinguishable from it once merged.
+    const uint32_t keycode_before_numpad_normalization = Global::Keycode;
     Global::Keycode = FanyImeIpc::NormalizeNumpadDigitKey(Global::Keycode);
     g_key_temporary_japanese_policy = ClientNegotiatedTemporaryJapanese(client_id)
                                           ? FanyNamedPipe::TemporaryJapanesePolicy()
@@ -1015,7 +1027,33 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
 
     if (FanyImeIpc::IsTranslationCommitKey(Global::Keycode, Global::ModifiersDown))
     {
-        HandleTranslationCommitKey(client_id, activation_epoch, request_id);
+        HandleTranslationCommitKey(client_id, activation_epoch, request_id, -1);
+        return;
+    }
+    // Ctrl+数字 / Shift+数字：上屏指定序号候选的译文（Ctrl+Enter 上屏当前高亮那条）。两个配置各管
+    // 一个修饰键，落到同一个处理 branch：TSF 侧已按同一份开关决定要不要吃键，这里按同样的形状判定，
+    // 两边必须一致，否则会变成一次吞键。
+    //
+    // 译文总开关（general.candidate_translations）关掉时 TSF 直接不吃这两个 chord，这里仍进同一个
+    // branch 回 NavigationIgnored——不要改成先判总开关再放行，那样会落到下面的普通选词分支，Ctrl+1
+    // 直接上屏第一个候选。
+    //
+    // V 模式的裸数字是算式编码键（数字、. + - * / ( )），选词改用 Shift+数字，那里的候选没有译文，
+    // 所以 Shift 让行——TSF 侧 IsShiftDigitOwnedByInputMode 按同一条形状让行（只认主键盘
+    // '1'..'9'）。少了这一条，同一颗 Shift+8 会走成一次吞键：TSF 当 V 模式输入吃下并写进本地预编辑，
+    // Server 却当译文快捷键吞掉、不写输入串，两侧分叉。
+    const bool shift_digit_owned_by_v_mode =
+        keycode_before_numpad_normalization >= '1' && keycode_before_numpad_normalization <= '9' &&
+        IsVModeCompositionActive(g_inputSession ? g_inputSession->get_pinyin_sequence_with_cases() : std::string{});
+    const bool ctrl_digit_chord = GetConfiguredCandidateTranslationCtrlDigitEnabled() &&
+                                  FanyImeIpc::IsTranslationDigitKey(Global::Keycode, Global::ModifiersDown);
+    const bool shift_digit_chord = GetConfiguredCandidateTranslationShiftDigitEnabled() &&
+                                   FanyImeIpc::IsTranslationShiftDigitKeyUnlessInputModeOwns(
+                                       Global::Keycode, Global::ModifiersDown, shift_digit_owned_by_v_mode);
+    if (ctrl_digit_chord || shift_digit_chord)
+    {
+        const uint32_t digit_position = FanyImeIpc::TranslationDigitPosition(Global::Keycode, Global::ModifiersDown);
+        HandleTranslationCommitKey(client_id, activation_epoch, request_id, static_cast<int>(digit_position) - 1);
         return;
     }
     // 译文页、日期页只认选词和翻页/移动高亮。其它任何键都先把候选框换回原来那一屏，然后照常处理，

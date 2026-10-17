@@ -127,6 +127,47 @@ inline std::string FormatTranslationGlossForDisplay(std::string_view gloss, bool
     return displayed;
 }
 
+// Helper for the digit-chord recognizers below: the digit range and the exact modifier mask.
+constexpr bool IsTranslationDigitFor(uint32_t keycode, uint32_t modifiers_down, uint32_t expected_modifier)
+{
+    return keycode >= static_cast<uint32_t>('1') && keycode <= static_cast<uint32_t>('9') &&
+           (modifiers_down & kKeyModifierMask) == expected_modifier;
+}
+
+// Ctrl+1..9: the numbered counterpart of Ctrl+Enter (which commits the highlighted one).
+// Shape only -- whether the chord is enabled is the caller's business. Alt, the Windows keys
+// and a bare digit keep their host meaning.
+constexpr bool IsTranslationDigitKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return IsTranslationDigitFor(keycode, modifiers_down, kModifierControl);
+}
+
+// Shift+1..9: the same shape with Shift instead of Ctrl. Opt-in per config: by default the
+// host keeps Shift+digit (typically the shifted symbol on the key, e.g. Shift+1 types '!').
+constexpr bool IsTranslationShiftDigitKey(uint32_t keycode, uint32_t modifiers_down)
+{
+    return IsTranslationDigitFor(keycode, modifiers_down, kModifierShift);
+}
+
+// The Shift chord, but standing down where an input mode owns Shift+digit for selection:
+// V-mode composes with bare digits and selects with Shift+1..9, and its candidates carry no
+// gloss. The TSF side (IsShiftDigitOwnedByInputMode) matches this shape -- main-row only --
+// and a mismatch between the two sides swallows the key: TSF eats it as V-mode input, the
+// Server eats it as a translation chord.
+constexpr bool IsTranslationShiftDigitKeyUnlessInputModeOwns(uint32_t keycode, uint32_t modifiers_down,
+                                                             bool input_mode_owns_shift_digit)
+{
+    return IsTranslationShiftDigitKey(keycode, modifiers_down) && !input_mode_owns_shift_digit;
+}
+
+// One-based candidate position the Ctrl/Shift+digit chord names, 0 when it is not that chord.
+constexpr uint32_t TranslationDigitPosition(uint32_t keycode, uint32_t modifiers_down)
+{
+    return (IsTranslationDigitKey(keycode, modifiers_down) || IsTranslationShiftDigitKey(keycode, modifiers_down))
+               ? keycode - static_cast<uint32_t>('0')
+               : 0;
+}
+
 // english.db stores one gloss string per entry with the senses already joined:
 // en->zh uses the fullwidth '；' ("苹果；家伙"), zh->en the ASCII "; " ("string; trail").
 // Every sense is returned, with its part-of-speech label removed.
