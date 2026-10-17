@@ -1444,14 +1444,19 @@ begin
     { 用户词库没搬成必须让安装失败。否则新版本会对着一个空的 msime_user.db 启动，
       ssPostInstall 的回放只会记一句 skipped，用户的自造词和词频就这么静悄悄没了——
       这正是 ReplayUserDictionary 失败时也要中止安装的那条理由。
-      config.toml 同理，见 ConfigMigrationFailure。皮肤等搬不动只记日志：它们丢了可以重建。}
+      config.toml 同理，见 ConfigMigrationFailure；custom_translations.txt 没有出厂副本，
+      见 TranslationMigrationFailure。皮肤等搬不动只记日志：它们丢了可以重建。}
     if FileExists(AddBackslash(OldDir) + 'msime_user.db') then
       Result :=
         '无法把用户词库从 ' + OldDir + ' 移动到 ' + NewDir + '。' + #13#10 +
         '请确认输入法相关进程已全部退出、目标磁盘可写且空间足够，然后重试安装。' + #13#10 +
         '你的用户词库仍留在 ' + OldDir + '，本次安装没有改动它。'
     else
+    begin
       Result := ConfigMigrationFailure(OldDir, NewDir);
+      if Result = '' then
+        Result := TranslationMigrationFailure(OldDir, NewDir);
+    end;
     exit;
   end;
 

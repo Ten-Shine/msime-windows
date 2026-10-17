@@ -20,6 +20,7 @@ class CloudChoiceTests(unittest.TestCase):
         self.assertLess(prepare.index("ConfigMigrationProblem("), prepare.index("StopImeProcesses;"))
         self.assertLess(migrate.index("ConfigMigrationProblem("), migrate.index("Log('Migrating user data"))
         self.assertIn("ConfigMigrationFailure(", migrate)
+        self.assertIn("TranslationMigrationFailure(", migrate)
 
     def test_conflict_is_rejected_on_the_data_dir_page(self):
         self.assertIn("ConfigMigrationProblem(", function_body("NextButtonClick"))
