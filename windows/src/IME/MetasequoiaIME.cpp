@@ -791,6 +791,10 @@ STDAPI CMetasequoiaIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClient
     _focusResetPending = false;
     _activationRequired = false;
     _focusLossDeferPending = false;
+    // ActivateEx runs when this text service becomes the thread's active
+    // input processor profile, so from here on this instance is the one that
+    // owns the toolbar for whatever window of this thread is focused.
+    _ownProfileActiveInThread = true;
     _workerCommitReady.store(false, std::memory_order_release);
     _acknowledgedWorkerFocusToken.store(0, std::memory_order_release);
     _localSessionResetPending.store(false, std::memory_order_release);
@@ -948,6 +952,9 @@ STDAPI CMetasequoiaIME::Deactivate()
     _UninitBareShiftKeyboardHook();
     Global::HostUiLessMode = false;
     Global::CandidateUiLessMode = false;
+    // This thread's active profile is leaving this text service; the
+    // toolbar belongs to whichever input method the user selects next.
+    _ownProfileActiveInThread = false;
     // Send this synchronously before destroying the message window. OnKill can
     // queue the same lifecycle event, but that queued message may never run
     // during a rapid TIP deactivation; the server treats duplicates as idempotent.
@@ -1082,6 +1089,8 @@ STDAPI CMetasequoiaIME::Deactivate()
         KillTimer(_msgWndHandle, TIMER_CONNECT_TO_TSF_NAMEDPIPE);
         KillTimer(_msgWndHandle, TIMER_REFRESH_LANG_BAR_THEME);
         KillTimer(_msgWndHandle, TIMER_DEFERRED_FOCUS_LOSS);
+        KillTimer(_msgWndHandle, TIMER_FOREGROUND_INPUT_METHOD_CHECK);
+        _foregroundInputMethodCheckStarted = 0;
         KillTimer(_msgWndHandle, TIMER_FOCUS_STATUS_RESEND);
         KillTimer(_msgWndHandle, TIMER_FOCUS_CARET_STATE);
         KillTimer(_msgWndHandle, TIMER_COMMIT_REPLY_POLL);
