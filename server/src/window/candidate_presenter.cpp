@@ -20,6 +20,7 @@
 #include "window/candidate_skin_tokens.h"
 #include "window/candidate_wheel_paging.h"
 #include "window/ime_windows.h"
+#include "window/window_opacity_policy.h"
 
 #include "msimeui/Controls.h"
 #include "msimeui/DeviceResources.h"
@@ -160,6 +161,9 @@ struct CandidatePresenter::Impl
     bool contextSubmenuOpen = false;
     bool hostExpandedForMenu = false;
     size_t contextMenuPageIndex = 0;
+    // 隐藏淡出用的整帧图层。跟着 render target 走：target 重建后要重新创建，
+    // Hide() 收尾时释放。
+    Microsoft::WRL::ComPtr<ID2D1Layer> fadeLayer_;
 };
 
 CandidatePresenter::CandidatePresenter() = default;
@@ -175,6 +179,19 @@ bool CandidatePresenter::IsBound() const
     return bound_;
 }
 
+void CandidatePresenter::SetFrameOpacity(float opacity)
+{
+    const float clamped = (std::max)(0.0f, (std::min)(1.0f, opacity));
+    if (frameOpacity_ == clamped)
+    {
+        return;
+    }
+    frameOpacity_ = clamped;
+    Present();
+}
+
+// 前景/背景不透明度不在这里压：配色与 token 都由 CandidateSkinScene 解析，压颜色也
+// 就跟着它走（CandidateSkinScene::Settings::backgroundOpacity / foregroundOpacity）。
 bool CandidatePresenter::Bind(HWND hwnd)
 {
     hwnd_ = hwnd;
@@ -254,6 +271,9 @@ void CandidatePresenter::ApplySkin()
                 << GetConfiguredCandidateFont() << '|' << GetConfiguredCandidateFontSize() << '|'
                 << GetConfiguredCandidateWindowPreeditFontSize() << '|' << GetConfiguredCandidateWindowLayout() << '|'
                 << GetConfiguredCandidateTextColor() << '|' << GetConfiguredCandidateWindowPreeditStyle();
+    // 前景/背景不透明度参与指纹：它们落在绘制颜色上，只有重新解析 token 才能生效。
+    fingerprint << '|' << GetConfiguredCandidateWindowBackgroundOpacity() << '|'
+                << GetConfiguredCandidateWindowForegroundOpacity();
     fingerprint << '|' << GetConfiguredCandidateEnglishFont() << '|' << GetConfiguredCandidateWindowFitContent();
     // 卷轴展开网格的列数上限跟每页候选数走。
     fingerprint << '|' << GetConfiguredCandidatePageSize();
@@ -294,6 +314,10 @@ void CandidatePresenter::ApplySkin()
     settings.pageSize = GetConfiguredCandidatePageSize();
     settings.framePadding = {kShadowPadLeft, kShadowPadTop, kShadowPadRight, kShadowPadBottom};
     settings.backdropAvailable = !backdropUnavailable_ && SystemTransparencyEnabled();
+    // 前景/背景不透明度落在绘制颜色上，所以必须交给场景在解析完配色之后再压：调色板与
+    // token 都是场景解析出来的，只有它能同时压到卡片、文字、装饰图与阴影上。
+    settings.backgroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredCandidateWindowBackgroundOpacity());
+    settings.foregroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredCandidateWindowForegroundOpacity());
     const CandidateSkinScene::Result result = impl_->scene.Apply(settings);
     if (result.rebuilt)
     {
@@ -1116,6 +1140,10 @@ void CandidatePresenter::Hide()
     // behind to show.
     PresentEmptyFrame();
     SetCandidateHostCloaked(true);
+    // 淡出到此为止：宿主已 cloak，整帧不透明度归位，下一次 show 不会接着上次的
+    // 淡出值画。图层跟着 target 走，一并释放。
+    frameOpacity_ = 1.0f;
+    impl_->fadeLayer_.Reset();
     lastHostWidthPx_ = 0;
     lastHostHeightPx_ = 0;
     stickyCardKey_.clear();
@@ -1161,6 +1189,24 @@ void CandidatePresenter::Present()
     }
     ID2D1RenderTarget *target = impl_->resources.GetRenderTarget();
     target->Clear(D2D1::ColorF(0, 0.0f));
+    // 隐藏淡出：D2D 宿主没有重定向位图，拿不到窗口级 alpha，整帧不透明度用一层
+    // D2D 图层实现（frameOpacity_ 为 1 时完全不压层，走原来的绘制路径）。
+    ID2D1DeviceContext *context = impl_->resources.GetDeviceContext();
+    bool layerPushed = false;
+    if (frameOpacity_ < 1.0f && context != nullptr && impl_->window->GetScene())
+    {
+        if (!impl_->fadeLayer_ && FAILED(context->CreateLayer(impl_->fadeLayer_.GetAddressOf())))
+        {
+            impl_->fadeLayer_.Reset();
+        }
+        if (impl_->fadeLayer_)
+        {
+            D2D1_LAYER_PARAMETERS params = D2D1::LayerParameters();
+            params.opacity = frameOpacity_;
+            target->PushLayer(params, impl_->fadeLayer_.Get());
+            layerPushed = true;
+        }
+    }
     if (msimeui::Scene *scene = impl_->window->GetScene())
     {
         const float dpi = impl_->window->GetDpi();
@@ -1177,6 +1223,10 @@ void CandidatePresenter::Present()
         scene->EnsureLayout({layoutW, layoutH});
         scene->Render(impl_->resources);
     }
+    if (layerPushed)
+    {
+        target->PopLayer();
+    }
     if (backdropActive_ && impl_->card)
     {
         // 和这一帧的内容同一次提交，卡片怎么伸缩毛玻璃都贴着它。
@@ -1185,6 +1235,8 @@ void CandidatePresenter::Present()
     const HRESULT hr = impl_->resources.EndDraw();
     if (hr == D2DERR_RECREATE_TARGET)
     {
+        // 图层是跟着 render target 的资源，target 重建后必须重新创建。
+        impl_->fadeLayer_.Reset();
         impl_->resources.DiscardTarget();
         return;
     }

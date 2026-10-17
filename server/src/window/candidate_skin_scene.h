@@ -147,6 +147,12 @@ class CandidateSkinScene
         msimeui::Thickness framePadding{32.0f, 20.0f, 32.0f, 40.0f};
         // 能用系统材质（亚克力 / 云母）时为真；为假时要材质的皮肤退回不透明底色。
         bool backdropAvailable = false;
+        // 前景/背景不透明度（0–1）。D2D 宿主没有重定向位图，拿不到窗口级 alpha，所以这两
+        // 个值压在**解析出来的绘制颜色**上：背景压卡片填充与描边、高亮与悬停底色、预编辑
+        // 底色与分隔线、菜单底与边框、装饰图与阴影；前景压候选文字、序号、译文、选中行文字、
+        // 选中条、预编辑光标与菜单文字。默认 1.0，即这个功能加入前的外观。
+        float backgroundOpacity = 1.0f;
+        float foregroundOpacity = 1.0f;
     };
 
     // 用户在场景里的操作，由调用方接到候选窗的消息或忽略（设置页预览）。

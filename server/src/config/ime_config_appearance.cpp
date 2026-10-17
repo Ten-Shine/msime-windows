@@ -24,6 +24,36 @@ bool SetConfiguredCandidatePageSize(int page_size)
     return true;
 }
 
+int GetConfiguredCandidateWindowBackgroundOpacity()
+{
+    return g_candidate_window_background_opacity;
+}
+
+bool SetConfiguredCandidateWindowBackgroundOpacity(int percent)
+{
+    if (percent < FanyImeUi::kWindowOpacityPercentMin || percent > FanyImeUi::kWindowOpacityPercentMax)
+        return false;
+    if (!WriteConfiguredValue("appearance", "candidate_window_background_opacity", std::to_string(percent)))
+        return false;
+    g_candidate_window_background_opacity = percent;
+    return true;
+}
+
+int GetConfiguredCandidateWindowForegroundOpacity()
+{
+    return g_candidate_window_foreground_opacity;
+}
+
+bool SetConfiguredCandidateWindowForegroundOpacity(int percent)
+{
+    if (percent < FanyImeUi::kWindowOpacityPercentMin || percent > FanyImeUi::kWindowOpacityPercentMax)
+        return false;
+    if (!WriteConfiguredValue("appearance", "candidate_window_foreground_opacity", std::to_string(percent)))
+        return false;
+    g_candidate_window_foreground_opacity = percent;
+    return true;
+}
+
 const std::string &GetConfiguredCandidateFont()
 {
     return g_candidate_font;

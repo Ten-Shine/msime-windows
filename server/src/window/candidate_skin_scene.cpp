@@ -17,6 +17,12 @@ D2D1_COLOR_F WithAlpha(D2D1_COLOR_F color, float alpha)
     return color;
 }
 
+// 前景/背景不透明度：乘到解析出来的绘制颜色上。就地改，调用点按"底"与"字"归类。
+void ScaleAlpha(D2D1_COLOR_F &color, float factor)
+{
+    color.a *= factor;
+}
+
 std::wstring Widen(const std::string &text)
 {
     if (text.empty())
@@ -558,11 +564,46 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
     CandSkinTokens tokens = ResolveCandidateSkinTokens(baseLook, packagePtr, candLight, horizontalLayout, fontSize);
     const CandidateSkinCatalog::CandidateColors *packageColors =
         package ? &(candLight ? package->light : package->dark) : nullptr;
-    const CandidateSkinPalette palette =
-        ResolveCandidateSkinPalette(baseLook, candLight, settings.textColor, packageColors);
+    // 前景/背景不透明度压在解析出来的颜色上（D2D 宿主拿不到窗口级 alpha）。卡片与文字都从
+    // 调色板取，先压调色板；token 里其余颜色按"底"与"字"各自归类压。
+    const float backgroundOpacity = (std::max)(0.0f, (std::min)(1.0f, settings.backgroundOpacity));
+    const float foregroundOpacity = (std::max)(0.0f, (std::min)(1.0f, settings.foregroundOpacity));
+    CandidateSkinPalette palette = ResolveCandidateSkinPalette(baseLook, candLight, settings.textColor, packageColors);
+    // 压之前先记下卡片底色的原始 alpha：背景材质的色调默认就取它，压过之后再用就成了平方。
+    const float surfaceAlpha = palette.surface.a;
+    ScaleAlpha(palette.surface, backgroundOpacity);
+    ScaleAlpha(palette.border, backgroundOpacity);
+    ScaleAlpha(palette.text, foregroundOpacity);
+    ScaleAlpha(palette.candidateText, foregroundOpacity);
+    ScaleAlpha(palette.preeditText, foregroundOpacity);
     tokens.surface = palette.surface;
     tokens.border = palette.border;
     tokens.text = palette.text;
+    // 背景：卡片填充与描边之上、作为"底"的部分——高亮与悬停底色、预编辑底色与分隔线、
+    // 右键菜单的底与边框、翻页分隔线。
+    ScaleAlpha(tokens.selected, backgroundOpacity);
+    ScaleAlpha(tokens.hover, backgroundOpacity);
+    ScaleAlpha(tokens.preeditBackground, backgroundOpacity);
+    ScaleAlpha(tokens.preeditDivider, backgroundOpacity);
+    ScaleAlpha(tokens.menuFill, backgroundOpacity);
+    ScaleAlpha(tokens.menuBorder, backgroundOpacity);
+    ScaleAlpha(tokens.menuHover, backgroundOpacity);
+    ScaleAlpha(tokens.pagerDivider, backgroundOpacity);
+    // 前景：画在卡片之上的内容——候选文字、序号、译文与其词性/分隔符、选中行文字、选中条、
+    // 预编辑光标、菜单文字与强调色。
+    ScaleAlpha(tokens.number, foregroundOpacity);
+    ScaleAlpha(tokens.translation, foregroundOpacity);
+    ScaleAlpha(tokens.translationPos, foregroundOpacity);
+    ScaleAlpha(tokens.translationSeparator, foregroundOpacity);
+    ScaleAlpha(tokens.rowTextSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowLabelSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationPosSelected, foregroundOpacity);
+    ScaleAlpha(tokens.rowTranslationSeparatorSelected, foregroundOpacity);
+    ScaleAlpha(tokens.menuText, foregroundOpacity);
+    ScaleAlpha(tokens.selectedBar, foregroundOpacity);
+    ScaleAlpha(tokens.preeditCaret, foregroundOpacity);
+    ScaleAlpha(tokens.accent, foregroundOpacity);
     // v2 面板贴图：有它时卡片自己的底色、描边、圆角和阴影都让给贴图（同 CSS border-image）。
     const bool panelImage =
         package && package->schemaVersion >= 2 && package->borderImage && !package->borderImage->source.empty();
@@ -579,7 +620,9 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
         material.source =
             mica ? msimeui::BackdropMaterial::Source::Wallpaper : msimeui::BackdropMaterial::Source::WindowsBehind;
         material.tint = tokens.surface;
-        material.tintOpacity = static_cast<float>(themeColors.backdropOpacity.value_or(tokens.surface.a));
+        // 色调也属于"底"，跟着背景不透明度一起淡。
+        material.tintOpacity =
+            static_cast<float>(themeColors.backdropOpacity.value_or(surfaceAlpha)) * backgroundOpacity;
         material.luminosityOpacity = static_cast<float>(themeColors.backdropLuminosity.value_or(mica ? 1.0 : 0.85));
     }
     {
@@ -590,7 +633,10 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
         if (shadow != "none" && !panelImage)
         {
             const float scale = ShadowAlphaScale(shadow);
-            const auto alpha = [scale](float value) { return (std::min)(value * scale, 1.0f); };
+            // 阴影属于"底"，跟着背景不透明度一起淡。
+            const auto alpha = [scale, backgroundOpacity](float value) {
+                return (std::min)(value * scale * backgroundOpacity, 1.0f);
+            };
             card_->SetShadowEnabled(true);
             card_->SetShadowPasses({
                 {12.0f, alpha(candLight ? 0.18f : 0.34f), 8.0f, 10.0f},
@@ -856,6 +902,8 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
                 ParseCandidateCssColor(decorationCandidate_->color, D2D1::ColorF(D2D1::ColorF::White)));
         }
     }
+    // 装饰图是挂在卡片外的贴图，属于"底"，跟着背景不透明度一起淡。
+    decoration_->SetOpacity(backgroundOpacity);
     // v2 挂件挂在卡片外沿，要按 outer_insets_dip 往四边多留出空白，否则立绘被裁掉。
     if (package && package->outerInsetsDip)
     {
@@ -880,11 +928,12 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
     msimeui::Brush brush;
     brush.fill = tokens.surface;
     // 有系统材质时色调已经画在合成层里，卡片不再叠底色；皮肤要材质却用不上（透明效果关闭或系统不支持）时
-    // 把半透明底色补成不透明，免得直接透出后面的窗口。
+    // 把半透明底色补到背景不透明度，免得皮肤自带的半透明把后面的窗口直接透出来。补到 backgroundOpacity
+    // 而不是硬编码 1：用户把背景调到 60% 要的就是通透，写成 1 等于这条设置在材质皮肤上点了没反应。
     if (result.backdropActive)
         brush.fill.a = 0.0f;
     else if (result.wantsBackdrop)
-        brush.fill.a = 1.0f;
+        brush.fill.a = backgroundOpacity;
     brush.stroke = tokens.border;
     brush.strokeWidth = tokens.borderWidth;
     brush.radiusX = tokens.radius;
@@ -913,14 +962,17 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
         // CSS border-image 语义：切片以源图像素计，边宽以 DIP 计，fill 决定是否画中心块。
         // 浅色主题有 light_source 时换那张图，几何不变。
         const CandidateSkinLayers::NineSlice nine = CandidateSkinLayers::ResolveNineSlice(*package->borderImage);
+        // 九宫格面板图就是卡片本身，跟着背景不透明度一起淡。
         card_->SetBackgroundNineSlice(
             packageRoot + Widen(CandidateSkinCatalog::BorderImageSource(*package->borderImage, candLight)),
-            msimeui::NineSlice{ToThickness(nine.slice), ToThickness(nine.width), nine.fill}, 1.0f);
+            msimeui::NineSlice{ToThickness(nine.slice), ToThickness(nine.width), nine.fill}, backgroundOpacity);
     }
     else
     {
+        // 背景图是卡片底色的一部分，皮肤自己的 opacity 之上再乘背景不透明度。
         card_->SetBackgroundImage(backgroundPath, BackgroundStretch(package ? package->backgroundFit : ""),
-                                  package ? static_cast<float>(package->backgroundOpacity) : 1.0f);
+                                  (package ? static_cast<float>(package->backgroundOpacity) : 1.0f) *
+                                      backgroundOpacity);
     }
     result.tokens = tokens;
     result.palette = palette;

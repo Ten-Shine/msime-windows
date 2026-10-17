@@ -13,6 +13,7 @@
 #include "window/small_windows.h"
 #include "window/floating_toolbar_image_layout.h"
 #include "window/floating_toolbar_skin.h"
+#include "window/window_opacity_policy.h"
 
 #include "msimeui/Controls.h"
 #include "msimeui/DeviceResources.h"
@@ -755,9 +756,12 @@ void FloatingToolbarPresenter::RebuildScene()
     impl_->card->SetShadowEnabled(shadow);
     if (shadow)
     {
+        // 阴影跟着背景不透明度一起淡。
+        const float shadowOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredFloatingToolbarBackgroundOpacity());
+        const auto alpha = [&](float value) { return (std::min)(value * shadowOpacity, 1.0f); };
         impl_->card->SetShadowPasses({
-            {12.0f, impl_->light ? 0.18f : 0.34f, 8.0f, 10.0f},
-            {4.0f, impl_->light ? 0.10f : 0.22f, 2.0f, 3.0f},
+            {12.0f, alpha(impl_->light ? 0.18f : 0.34f), 8.0f, 10.0f},
+            {4.0f, alpha(impl_->light ? 0.10f : 0.22f), 2.0f, 3.0f},
         });
     }
     impl_->card->AddChild(row);
@@ -826,12 +830,24 @@ void FloatingToolbarPresenter::ApplyTheme()
         impl_->resources.SetAnimationEpoch(msimeui::DeviceResources::AnimationClock::now());
         impl_->shapePath.clear();
     }
-    impl_->fill = skin.fill;
-    impl_->border = skin.border;
-    impl_->glyph = skin.glyph;
-    impl_->hover = skin.hover;
-    impl_->divider = skin.divider;
-    impl_->handle = skin.handle;
+    // 前景/背景不透明度落在绘制颜色上：背景 = 卡片填充、描边、悬停底色、分隔线
+    // 与拖拽手柄（都是"底"上的东西）；前景 = 图标与文字。
+    const float backgroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredFloatingToolbarBackgroundOpacity());
+    const float foregroundOpacity = FanyImeUi::WindowOpacityFloat(GetConfiguredFloatingToolbarForegroundOpacity());
+    const auto scaleBackground = [backgroundOpacity](D2D1_COLOR_F color) {
+        color.a *= backgroundOpacity;
+        return color;
+    };
+    const auto scaleForeground = [foregroundOpacity](D2D1_COLOR_F color) {
+        color.a *= foregroundOpacity;
+        return color;
+    };
+    impl_->fill = scaleBackground(skin.fill);
+    impl_->border = scaleBackground(skin.border);
+    impl_->glyph = scaleForeground(skin.glyph);
+    impl_->hover = scaleBackground(skin.hover);
+    impl_->divider = scaleBackground(skin.divider);
+    impl_->handle = scaleBackground(skin.handle);
     impl_->radius = skin.radius;
     impl_->iconRadius = skin.iconRadius;
     impl_->light = light;

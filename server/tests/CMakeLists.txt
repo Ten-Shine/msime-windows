@@ -128,6 +128,7 @@ set(TEST_SOURCE_FILES
     "${CMAKE_SOURCE_DIR}/src/voice-input/voice_batch_protocol.cpp"
     "${CMAKE_SOURCE_DIR}/src/voice-input/voice_providers.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_floating_toolbar_visibility_policy.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/test_window_opacity_policy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_caret_state_indicator_policy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_tray_menu_placement.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_terminal_deactivation_policy.cpp"
