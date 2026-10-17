@@ -5,6 +5,7 @@
 #include "window/candidate_presenter.h"
 #include "window/floating_toolbar_presenter.h"
 #include "window/tray_menu_presenter.h"
+#include "window/window_opacity_policy.h"
 #include "defines/defines.h"
 #include "defines/globals.h"
 #include <algorithm>
@@ -38,6 +39,17 @@ POINT g_candidate_session_anchor{};
 // from that handler races the hide and can recurse until the UI thread stalls —
 // seen when switching apps.
 int g_candidate_dpi_change_suppress_count = 0;
+// Last frame actually painted, used to drop duplicate shows. Cleared on hide so
+// the next session always paints.
+std::wstring g_last_rendered_candidate_signature;
+ULONGLONG g_last_rendered_candidate_tick = 0;
+// 候选窗隐藏淡出的状态。All on the UI thread, like the applies; the fade keeps
+// ::is_global_wnd_cand_shown true until it lands, so a show inside the fade
+// cancels it instead of racing the teardown.
+bool g_candidate_hide_fading = false;
+ULONGLONG g_candidate_fade_start = 0;
+BYTE g_candidate_fade_from = 255;
+BYTE g_candidate_current_alpha = 255;
 
 // WM_SETTINGCHANGE lParam points to "ImmersiveColorSet" when the user flips
 // the Windows app light/dark theme. The presenters own their colors, so they
@@ -163,6 +175,126 @@ std::wstring DescribeFloatingToolbarHostState()
 void SetCandidateHostCloaked(bool cloaked)
 {
     SetHostWindowCloaked(::global_hwnd, cloaked);
+}
+
+namespace
+{
+
+BYTE CandidateWindowBaseAlpha()
+{
+    // 前景/背景不透明度落在绘制颜色里（CandidatePresenter::ApplySkin），窗口级 alpha
+    // 只服务隐藏淡出，基准是"不压"：整帧 alpha 乘在整帧上，候选文字也在里面，把它写成
+    // 背景不透明度就会把前景一起乘掉，背景调到 1% 等于前景也调到 1%。
+    return FanyImeUi::kWindowBaseAlpha;
+}
+
+// D2D 端没有重定向位图，整帧不透明度由 presenter 用一层 D2D 图层画出来。
+// 只写"整帧"alpha，调用方要么在跑隐藏淡出，要么在把 alpha 放回 CandidateWindowBaseAlpha()
+// ——不要在这里传前景/背景不透明度。g_candidate_current_alpha 记录最后一次写入的值，
+// 淡出从它起步。
+void SetCandidateHostAlpha(BYTE alpha)
+{
+    g_candidate_current_alpha = alpha;
+    CandidatePresenter::Instance().SetFrameOpacity(static_cast<float>(alpha) / 255.0f);
+}
+
+} // namespace
+
+namespace ime_windows_detail
+{
+
+void BeginCandidateHideFade()
+{
+    if (!::global_hwnd)
+    {
+        return;
+    }
+    // 起点取当前值：重复的 hide 由调用方折进在途的那段，这里只负责第一段。
+    g_candidate_hide_fading = true;
+    g_candidate_fade_start = GetTickCount64();
+    g_candidate_fade_from = g_candidate_current_alpha;
+    SetTimer(::global_hwnd, TIMER_ID_CANDIDATE_HIDE_FADE, kFloatingToolbarAutoHideFadeStepMs, nullptr);
+}
+
+void CancelCandidateHideFade()
+{
+    if (!g_candidate_hide_fading)
+    {
+        return;
+    }
+    if (::global_hwnd)
+    {
+        KillTimer(::global_hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+    }
+    g_candidate_hide_fading = false;
+    SetCandidateHostAlpha(CandidateWindowBaseAlpha());
+}
+
+void StepCandidateHideFade(HWND hwnd)
+{
+    if (!g_candidate_hide_fading)
+    {
+        KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+        return;
+    }
+    const ULONGLONG elapsed = GetTickCount64() - g_candidate_fade_start;
+    if (elapsed < kCandidateHideFadeMs)
+    {
+        SetCandidateHostAlpha(FanyImeUi::WindowFadeAlpha(g_candidate_fade_from, 0, elapsed, kCandidateHideFadeMs));
+        return;
+    }
+    KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+    g_candidate_hide_fading = false;
+    SetCandidateHostAlpha(0);
+    ApplyCandidateHideNow(hwnd);
+}
+
+void ApplyCandidateHideNow(HWND hwnd)
+{
+    // 淡出中的话到这儿结束：宿主即将被 cloak，alpha 放回基准值——不放回的
+    // 话下一次 show 会从 0（看不见）开始。
+    if (g_candidate_hide_fading)
+    {
+        KillTimer(hwnd, TIMER_ID_CANDIDATE_HIDE_FADE);
+        g_candidate_hide_fading = false;
+    }
+    ::is_global_wnd_cand_shown = false;
+    Global::SetCandidateWindowRenderedVisible(false);
+    g_last_rendered_candidate_signature.clear();
+    KillTimer(hwnd, TIMER_ID_CANDIDATE_MOVE_SETTLE);
+    g_candidate_session_anchor_valid = false;
+    ResetCandidatePlacementMemory();
+    {
+        SuppressCandidateDpiChange suppressDpi;
+        if (CandidatePresenter::Instance().IsBound())
+        {
+            CandidatePresenter::Instance().Hide();
+        }
+        else
+        {
+            SetHostWindowCloaked(hwnd, true);
+        }
+    }
+    // 收尾后放回基准不透明度：宿主已 cloak 或移出屏幕，这一步不可见。
+    SetCandidateHostAlpha(CandidateWindowBaseAlpha());
+}
+
+} // namespace ime_windows_detail
+
+void ApplyConfiguredCandidateWindowOpacity()
+{
+    if (!::global_hwnd)
+    {
+        return;
+    }
+    // 前景/背景不透明度落在绘制颜色里（CandidatePresenter::ApplySkin），重新套一遍
+    // 皮肤即生效——与字号、字体这些外观项一致，没有渐变：D2D 宿主没有窗口级 alpha
+    // 可用，整帧淡出只留给隐藏。
+    CandidatePresenter::Instance().ApplySkin();
+    if (::is_global_wnd_cand_shown)
+    {
+        CandidatePresenter::Instance().Present();
+    }
 }
 
 std::wstring DescribeCandidateHostState()
@@ -291,6 +423,9 @@ int CreateCandidateWindow(HINSTANCE hInstance)
 
     ::global_hwnd = hwnd_cand;
     CandidatePresenter::Instance().Bind(hwnd_cand);
+    // 前景/背景不透明度落在绘制颜色里，宿主刚建好就得按配置套一遍皮肤，
+    // 否则第一次显示用的是出厂配色。
+    ApplyConfiguredCandidateWindowOpacity();
     CAND_DIAG_LOGF(L"candidate host created {}", DescribeCandidateHostState());
 
     // A client can activate while the pipe server is already listening but this
@@ -389,6 +524,9 @@ int CreateCandidateWindow(HINSTANCE hInstance)
     ::global_hwnd_ftb = hwnd_ftb;
     FanyNamedPipe::RegisterStatusSnapshotWindow(hwnd_ftb);
     FloatingToolbarPresenter::Instance().Bind(hwnd_ftb);
+    // 前景/背景不透明度落在绘制颜色里，宿主刚建好就得按配置套一遍皮肤，
+    // 否则第一次显示用的是出厂配色。
+    ApplyConfiguredFloatingToolbarOpacity();
 
     // Cloaked show: the hosts are on a real monitor but invisible to the user
     // until their presenters uncloak them.

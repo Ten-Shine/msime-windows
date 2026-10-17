@@ -135,6 +135,38 @@ VisualPtr BuildFloatingToolbarPage(PageContext &context)
         std::make_shared<SettingRow>(MakeTitleBlock(L"在桌面显示悬浮工具栏", L"快速访问输入法状态与常用功能"),
                                      BindToggle(context, "general.floating_toolbar"))));
 
+    // 前景/背景各压各的绘制颜色，因此是两个步进器，区间 1–100 与
+    // window_opacity_policy.h 的 kWindowOpacityPercent{Min,Max} 一致；自动降低开启后
+    // 出现「无交互后的不透明度」与「自动降低不透明度延时」两个子选项，样式与自动隐藏
+    // 及其延时一致（初始置灰、缩进、步进器三件套）。
+    auto opacityBg = SettingBand(std::make_shared<SettingRow>(
+        OptionTitle(L"工具栏背景不透明度", L"卡片填充、描边、悬停底色、分隔线与拖拽手柄的通透程度"),
+        BindStepper(context, "general.floating_toolbar_background_opacity", 1, 100)));
+    opacityBg->SetTopRule(DividerColor);
+    toolbarCard->Add(opacityBg);
+    toolbarCard->Add(SettingBand(
+        std::make_shared<SettingRow>(OptionTitle(L"工具栏前景不透明度", L"工具栏图标与文字的通透程度"),
+                                     BindStepper(context, "general.floating_toolbar_foreground_opacity", 1, 100))));
+
+    auto autoDim = SettingBand(std::make_shared<SettingRow>(
+        OptionTitle(L"自动降低不透明度",
+                    L"工具栏显示一段时间无交互后降低不透明度；鼠标悬停时不降低，切换中英等状态变化时回到原不透明度"),
+        BindToggle(context, "general.floating_toolbar_auto_dim")));
+    autoDim->SetTopRule(DividerColor);
+    toolbarCard->Add(autoDim);
+
+    // 缩进 48px，自动降低关闭时置灰，与自动隐藏延时同一套样式。
+    auto dimOpacity = std::make_shared<Band>(
+        std::make_shared<SettingRow>(OptionTitle(L"无交互后的不透明度", L"工具栏无交互后降低到的不透明度"),
+                                     BindStepper(context, "general.floating_toolbar_auto_dim_opacity", 1, 100)),
+        Thickness{48.0f, 20.0f, 24.0f, 20.0f});
+    toolbarCard->Add(dimOpacity);
+    auto dimDelay = std::make_shared<Band>(
+        std::make_shared<SettingRow>(OptionTitle(L"自动降低不透明度延时", L"工具栏显示多久后开始降低不透明度（秒）"),
+                                     BindStepper(context, "general.floating_toolbar_auto_dim_delay", 1, 60)),
+        Thickness{48.0f, 20.0f, 24.0f, 20.0f});
+    toolbarCard->Add(dimDelay);
+
     auto autoHide = SettingBand(std::make_shared<SettingRow>(
         OptionTitle(L"自动隐藏工具栏",
                     L"工具栏显示一段时间无交互后淡出隐藏；鼠标悬停不隐藏，切换中英等状态变化时重新显示"),
@@ -241,9 +273,17 @@ VisualPtr BuildFloatingToolbarPage(PageContext &context)
     page.AddSection(components);
 
     std::weak_ptr<Band> weakDelay = delay;
-    auto sync = [model, toolbar, caret, weakDelay]() {
+    std::weak_ptr<Band> weakDimOpacity = dimOpacity;
+    std::weak_ptr<Band> weakDimDelay = dimDelay;
+    auto sync = [model, toolbar, caret, weakDelay, weakDimOpacity, weakDimDelay]() {
         if (auto row = weakDelay.lock())
             row->SetDimmed(!model->GetBool("general.floating_toolbar_auto_hide", false));
+        // 自动降低关闭时两个子选项置灰，与自动隐藏延时同一套样式。
+        const bool autoDim = model->GetBool("general.floating_toolbar_auto_dim", false);
+        if (auto row = weakDimOpacity.lock())
+            row->SetDimmed(!autoDim);
+        if (auto row = weakDimDelay.lock())
+            row->SetDimmed(!autoDim);
 
         const std::string skin = model->GetString("appearance.candidate_skin", "fluent");
         skinpreview::ToolbarPreview::Options options;

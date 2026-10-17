@@ -592,6 +592,12 @@ VisualPtr BuildAppearancePage(PageContext &context)
         addRow(MakeRow(L"每页候选项数量", L"",
                        BindDropdown(context, "appearance.page_size", NumberOptions(3, 9), Dropdown::Options{true},
                                     ValueKind::Integer)));
+        // 前景/背景各压各的绘制颜色，因此是两个选项；步进器区间 1–100 与
+        // window_opacity_policy.h 的 kWindowOpacityPercent{Min,Max} 一致。
+        addRow(MakeRow(L"候选窗口背景不透明度", L"卡片、描边、选中与悬停底色、预编辑底色的通透程度",
+                       BindStepper(context, "appearance.candidate_window_background_opacity", 1, 100)));
+        addRow(MakeRow(L"候选窗口前景不透明度", L"候选文字、序号、译文这些画在卡片之上的内容的通透程度",
+                       BindStepper(context, "appearance.candidate_window_foreground_opacity", 1, 100)));
         page.AddSection(rows);
 
         std::weak_ptr<Dropdown> weakFont = fontDropdown;
