@@ -63,6 +63,9 @@ InputStateShortcutValues g_input_state_shortcuts = [] {
     return values;
 }();
 int g_candidate_page_size = 8;
+// 候选窗不透明度：100 = 完全不透明，保持这个功能加入前的默认外观。
+int g_candidate_window_background_opacity = FanyImeUi::kWindowOpacityPercentDefault;
+int g_candidate_window_foreground_opacity = FanyImeUi::kWindowOpacityPercentDefault;
 std::string g_candidate_font = "Noto Sans SC";
 std::string g_candidate_english_font = "Segoe UI";
 std::string g_candidate_default_font = "Microsoft YaHei";
@@ -135,6 +138,12 @@ int g_floating_toolbar_font_size = kFloatingToolbarFontSizeDefault;
 bool g_floating_toolbar_auto_hide = false;
 int g_floating_toolbar_auto_hide_delay = kFloatingToolbarAutoHideDelayDefault;
 bool g_floating_toolbar_shadow = true;
+// 100 = 完全不透明，保持这个功能加入前的默认外观。
+int g_floating_toolbar_background_opacity = FanyImeUi::kWindowOpacityPercentDefault;
+int g_floating_toolbar_foreground_opacity = FanyImeUi::kWindowOpacityPercentDefault;
+bool g_floating_toolbar_auto_dim = false;
+int g_floating_toolbar_auto_dim_opacity = kFloatingToolbarAutoDimOpacityDefault;
+int g_floating_toolbar_auto_dim_delay = kFloatingToolbarAutoDimDelayDefault;
 bool g_english_candidates_enabled = false;
 bool g_candidate_translations_enabled = false;
 std::atomic_bool g_candidate_translation_show_pos{true};
@@ -399,6 +408,11 @@ bool LoadImeConfig()
 
         const int page_size = tbl["appearance"]["page_size"].value_or(6);
         g_candidate_page_size = page_size >= 3 && page_size <= 9 ? page_size : 6;
+        // 手写配置越界时收敛到区间端点，比整体回落默认值更接近用户意图。
+        g_candidate_window_background_opacity = FanyImeUi::ClampWindowOpacityPercent(
+            tbl["appearance"]["candidate_window_background_opacity"].value_or(FanyImeUi::kWindowOpacityPercentDefault));
+        g_candidate_window_foreground_opacity = FanyImeUi::ClampWindowOpacityPercent(
+            tbl["appearance"]["candidate_window_foreground_opacity"].value_or(FanyImeUi::kWindowOpacityPercentDefault));
         g_candidate_font = tbl["appearance"]["font"].value_or(std::string("Noto Sans SC"));
         if (g_candidate_font.empty())
             g_candidate_font = "Noto Sans SC";
@@ -577,6 +591,22 @@ bool LoadImeConfig()
                                                      ? auto_hide_delay
                                                      : kFloatingToolbarAutoHideDelayDefault;
             g_floating_toolbar_shadow = tbl["general"]["floating_toolbar_shadow"].value_or(true);
+            // 手写配置越界时收敛到区间端点，比整体回落默认值更接近用户意图。
+            g_floating_toolbar_background_opacity =
+                FanyImeUi::ClampWindowOpacityPercent(tbl["general"]["floating_toolbar_background_opacity"].value_or(
+                    FanyImeUi::kWindowOpacityPercentDefault));
+            g_floating_toolbar_foreground_opacity =
+                FanyImeUi::ClampWindowOpacityPercent(tbl["general"]["floating_toolbar_foreground_opacity"].value_or(
+                    FanyImeUi::kWindowOpacityPercentDefault));
+            g_floating_toolbar_auto_dim = tbl["general"]["floating_toolbar_auto_dim"].value_or(false);
+            g_floating_toolbar_auto_dim_opacity = FanyImeUi::ClampWindowOpacityPercent(
+                tbl["general"]["floating_toolbar_auto_dim_opacity"].value_or(kFloatingToolbarAutoDimOpacityDefault));
+            const int auto_dim_delay =
+                tbl["general"]["floating_toolbar_auto_dim_delay"].value_or(kFloatingToolbarAutoDimDelayDefault);
+            g_floating_toolbar_auto_dim_delay =
+                auto_dim_delay >= kFloatingToolbarAutoDimDelayMin && auto_dim_delay <= kFloatingToolbarAutoDimDelayMax
+                    ? auto_dim_delay
+                    : kFloatingToolbarAutoDimDelayDefault;
         }
         g_english_candidates_enabled = tbl["general"]["cn_en_mixed_input"].value_or(false);
         g_candidate_translations_enabled = tbl["general"]["candidate_translations"].value_or(false);

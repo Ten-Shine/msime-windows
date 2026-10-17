@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 #include "config/ime_config.h"
+#include "window/window_opacity_policy.h"
 
 namespace ime_config_detail
 {
@@ -30,6 +31,12 @@ constexpr int kFloatingToolbarFontSizeDefault = 24;
 constexpr int kFloatingToolbarAutoHideDelayMin = 1;
 constexpr int kFloatingToolbarAutoHideDelayMax = 60;
 constexpr int kFloatingToolbarAutoHideDelayDefault = 5;
+// 自动降低不透明度与自动隐藏各一套延时：一个只改透明度、一个直接隐藏，
+// 同时开启时先降透明度、到点再隐藏。
+constexpr int kFloatingToolbarAutoDimDelayMin = 1;
+constexpr int kFloatingToolbarAutoDimDelayMax = 60;
+constexpr int kFloatingToolbarAutoDimDelayDefault = 5;
+constexpr int kFloatingToolbarAutoDimOpacityDefault = 50;
 constexpr int kEnglishMixedInputMinCharsMin = 1;
 constexpr int kEnglishMixedInputMinCharsMax = 8;
 constexpr int kEnglishMixedInputMinCharsDefault = 2;
@@ -129,6 +136,8 @@ extern bool g_switch_language_ctrl_alt_space_enabled;
 extern bool g_character_set_shortcut_enabled;
 extern InputStateShortcutValues g_input_state_shortcuts;
 extern int g_candidate_page_size;
+extern int g_candidate_window_background_opacity;
+extern int g_candidate_window_foreground_opacity;
 extern std::string g_candidate_font;
 extern std::string g_candidate_english_font;
 extern std::string g_candidate_default_font;
@@ -181,6 +190,11 @@ extern int g_floating_toolbar_font_size;
 extern bool g_floating_toolbar_auto_hide;
 extern int g_floating_toolbar_auto_hide_delay;
 extern bool g_floating_toolbar_shadow;
+extern int g_floating_toolbar_background_opacity;
+extern int g_floating_toolbar_foreground_opacity;
+extern bool g_floating_toolbar_auto_dim;
+extern int g_floating_toolbar_auto_dim_opacity;
+extern int g_floating_toolbar_auto_dim_delay;
 extern bool g_english_candidates_enabled;
 extern bool g_candidate_translations_enabled;
 extern std::atomic_bool g_candidate_translation_show_pos;

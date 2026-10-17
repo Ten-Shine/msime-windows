@@ -14,6 +14,14 @@ class CandidatePresenter
 
     bool Bind(HWND hwnd);
     bool IsBound() const;
+    // Re-resolve the skin tokens and repaint. Public because the window layer
+    // calls it when the foreground/background opacity change: on D2D those two
+    // land in the drawn colors, not in a window attribute.
+    void ApplySkin();
+    // Whole-frame opacity (0..1) used while fading the window out. D2D has no
+    // window-level alpha to lean on (the host has no redirection bitmap), so
+    // the fade is drawn as a layer opacity around the scene instead.
+    void SetFrameOpacity(float opacity);
     void ShowFromGlobalState();
     void ShowFromGlobalState(POINT caret);
     void Hide();
@@ -27,7 +35,6 @@ class CandidatePresenter
     CandidatePresenter &operator=(const CandidatePresenter &) = delete;
 
     void RebuildScene();
-    void ApplySkin();
     // Returns the generation of the snapshot that was actually rendered, so the caller can echo it
     // back to Global::rendered_candidate_page_generation once the paint is on screen.
     std::uint64_t FillItemsFromUi();
@@ -83,4 +90,7 @@ class CandidatePresenter
     float stickyCardWidthDip_ = 0.0f;
     float stickyCardHeightDip_ = 0.0f;
     int wheelDeltaAccumulator_ = 0;
+    // 整帧不透明度（隐藏淡出用）。1.0 时不压图层，走原来的绘制路径。D2D 的图层
+    // 本身跟 render target 走，放在 Impl 里。
+    float frameOpacity_ = 1.0f;
 };

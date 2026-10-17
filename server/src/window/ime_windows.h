@@ -25,6 +25,10 @@ RECT GetTrayMenuAnchorRect();
 LRESULT CALLBACK WndProcFtbWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK WndProcCaretStateWindow(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 void SetCandidateHostCloaked(bool cloaked);
+// Push the configured candidate-window opacity onto the host. The two values land
+// in the drawn colors (CandidatePresenter::ApplySkin), so this re-applies the skin
+// and repaints; it takes effect without a relayout.
+void ApplyConfiguredCandidateWindowOpacity();
 // reason identifies the trigger in the floating-toolbar diagnostic trace. The
 // whole class of bugs here is "nothing ever called this", so the caller has to
 // be recoverable from the log.
@@ -44,5 +48,8 @@ void RevealAutoHiddenFloatingToolbar(const wchar_t *reason);
 // these fields tell the two apart.
 std::wstring DescribeTrayMenuHostState();
 void ApplyConfiguredFloatingToolbarSize();
+// Apply the configured toolbar opacity. Called at window creation and from the
+// config sync when an opacity setting changes.
+void ApplyConfiguredFloatingToolbarOpacity();
 void ApplyConfiguredInputScheme();
 void ApplyConfiguredShuangpinSchema();

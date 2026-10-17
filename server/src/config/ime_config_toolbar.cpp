@@ -197,3 +197,76 @@ bool SetConfiguredFloatingToolbarShadow(bool enabled)
     g_floating_toolbar_shadow = enabled;
     return true;
 }
+
+int GetConfiguredFloatingToolbarBackgroundOpacity()
+{
+    return g_floating_toolbar_background_opacity;
+}
+
+bool SetConfiguredFloatingToolbarBackgroundOpacity(int percent)
+{
+    if (percent < FanyImeUi::kWindowOpacityPercentMin || percent > FanyImeUi::kWindowOpacityPercentMax)
+        return false;
+    if (!WriteConfiguredValue("general", "floating_toolbar_background_opacity", std::to_string(percent)))
+        return false;
+    g_floating_toolbar_background_opacity = percent;
+    return true;
+}
+
+int GetConfiguredFloatingToolbarForegroundOpacity()
+{
+    return g_floating_toolbar_foreground_opacity;
+}
+
+bool SetConfiguredFloatingToolbarForegroundOpacity(int percent)
+{
+    if (percent < FanyImeUi::kWindowOpacityPercentMin || percent > FanyImeUi::kWindowOpacityPercentMax)
+        return false;
+    if (!WriteConfiguredValue("general", "floating_toolbar_foreground_opacity", std::to_string(percent)))
+        return false;
+    g_floating_toolbar_foreground_opacity = percent;
+    return true;
+}
+
+bool GetConfiguredFloatingToolbarAutoDim()
+{
+    return g_floating_toolbar_auto_dim;
+}
+
+bool SetConfiguredFloatingToolbarAutoDim(bool enabled)
+{
+    if (!WriteConfiguredValue("general", "floating_toolbar_auto_dim", enabled ? "true" : "false"))
+        return false;
+    g_floating_toolbar_auto_dim = enabled;
+    return true;
+}
+
+int GetConfiguredFloatingToolbarAutoDimOpacity()
+{
+    return g_floating_toolbar_auto_dim_opacity;
+}
+
+bool SetConfiguredFloatingToolbarAutoDimOpacity(int percent)
+{
+    if (percent < FanyImeUi::kWindowOpacityPercentMin || percent > FanyImeUi::kWindowOpacityPercentMax)
+        return false;
+    if (!WriteConfiguredValue("general", "floating_toolbar_auto_dim_opacity", std::to_string(percent)))
+        return false;
+    g_floating_toolbar_auto_dim_opacity = percent;
+    return true;
+}
+
+int GetConfiguredFloatingToolbarAutoDimDelay()
+{
+    return g_floating_toolbar_auto_dim_delay;
+}
+
+bool SetConfiguredFloatingToolbarAutoDimDelay(int seconds)
+{
+    if (seconds < kFloatingToolbarAutoDimDelayMin || seconds > kFloatingToolbarAutoDimDelayMax)
+        return false;
+    if (!WriteConfiguredValue("general", "floating_toolbar_auto_dim_delay", std::to_string(seconds)))
+        return false;
+    g_floating_toolbar_auto_dim_delay = seconds;
+    return true;
+}
