@@ -67,6 +67,11 @@ class Inputs:
             raise FileNotFoundError(f"msime-dictionary checkout 缺少 {relative}")
         return path
 
+    def optional(self, relative: str) -> Path | None:
+        """可选的输入：msime-dictionary 还没有收录该文件时返回 None（如 custom/symbols.txt）。"""
+        path = self.dictionary / relative
+        return path if path.is_file() else None
+
     def resource(self, relative: str) -> Path:
         return self.msime_files[relative]
 
