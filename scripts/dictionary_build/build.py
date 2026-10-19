@@ -161,13 +161,17 @@ def build_others(source: inputs.Inputs, path: Path, stage: Stages) -> None:
             groups = symbols_db.parse_wanxiang(textutil.read(source.source(symbols_db.WANXIANG)))
             codex = symbols_db.parse_codex(textutil.read(source.source(symbols_db.CODEX)))
             excluded = symbols_db.parse_unrenderable(textutil.read(source.source(symbols_db.UNRENDERABLE)))
-            readings = symbols_db.parse_readings(textutil.read(source.source(symbols_db.READINGS)))
+            # custom/symbols.txt 是可选输入：msime-dictionary 还没收录它时按 0 条读音构建。
+            readings_file = source.optional(symbols_db.READINGS)
+            readings = (symbols_db.parse_readings(textutil.read(readings_file))
+                        if readings_file else [])
             catalog = symbols_db.catalog_rows(pinyin, groups, codex, excluded)
             codes = symbols_db.code_rows(groups, readings, codex, excluded)
             symbols_db.build(connection, catalog, codes)
             return (f"{len(catalog)} panel symbols, {len(codes)} code rows from {len(groups)} groups, "
                     f"{len(readings)} pinyin readings and {len(codex)} codex names, "
-                    f"{len(excluded)} unrenderable left out")
+                    f"{len(excluded)} unrenderable left out"
+                    + ("" if readings_file else f"（{symbols_db.READINGS} 未收录，标点读音未启用）"))
 
         stage("symbols", symbols)
     finally:

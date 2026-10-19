@@ -8,6 +8,9 @@
 
 万象表里不是符号的分组不收：Emoji 分类（E 模式和表情面板已有 emoji）、元素周期表（元素信息文本）、
 XCompose 合成（编码含标点，S 模式只能输入字母）。
+
+custom/symbols.txt 是可选输入：msime-dictionary 检出里没有它时（文件还没收录进词库源仓），按 0 条读音构建，
+symbol_code 就只来自万象分组与 codex 名称。
 """
 
 from __future__ import annotations
@@ -183,7 +186,7 @@ def parse_unrenderable(text: str) -> set[str]:
     return symbols
 
 
-def parse_readings(text: str) -> list[tuple[str, str]]:
+def parse_readings(text: str, name: str = READINGS) -> list[tuple[str, str]]:
     """`编码<TAB>符号`，编码只含小写字母；同一编码的多行按文件顺序，混输时第一行紧跟首选。"""
     entries = []
     for number, line in enumerate(textutil.universal_lines(textutil.without_bom(text)), start=1):
@@ -191,7 +194,7 @@ def parse_readings(text: str) -> list[tuple[str, str]]:
             continue
         code, separator, symbol = line.partition("\t")
         if not separator or not re.fullmatch(r"[a-z]+", code) or not symbol or "\t" in symbol:
-            raise ValueError(f"{READINGS}:{number}: expected lowercase pinyin<TAB>symbol")
+            raise ValueError(f"{name}:{number}: expected lowercase pinyin<TAB>symbol")
         entries.append((code, symbol))
     return entries
 
