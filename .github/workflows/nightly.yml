@@ -17,12 +17,12 @@ name: Nightly
 # A failing schedule is silent by default -- GitHub only mails whoever triggered a run, and a
 # schedule has no triggerer. The notify job files or updates an issue instead.
 on:
-  schedule:
-    # Monday, Wednesday and Saturday at 20:00 UTC (04:00 Beijing the next morning). Hourly would
-    # spend a full runner quota on builds nobody asked for; three a week keeps the channel fresh
-    # without turning every merge into a published package. GitHub delays scheduled runs at peak
-    # times, so this is a target rather than a guarantee: nothing downstream depends on the hour.
-    - cron: '0 20 * * 1,3,6'
+  # schedule:
+  #   # Monday, Wednesday and Saturday at 20:00 UTC (04:00 Beijing the next morning). Hourly would
+  #   # spend a full runner quota on builds nobody asked for; three a week keeps the channel fresh
+  #   # without turning every merge into a published package. GitHub delays scheduled runs at peak
+  #   # times, so this is a target rather than a guarantee: nothing downstream depends on the hour.
+  #   - cron: '0 20 * * 1,3,6'
   workflow_dispatch:
     inputs:
       publish:
